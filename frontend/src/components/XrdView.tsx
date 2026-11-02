@@ -1,3 +1,4 @@
+import { DownloadLink } from "./DownloadLink";
 import React, { useMemo, useState } from "react";
 import { RefreshCw, Eye, EyeOff, ChevronRight, Info, Download, Sparkles } from "lucide-react";
 import { api } from "../api";
@@ -503,7 +504,7 @@ export function XrdView({
               >
                 검출용 평활선
               </Button>
-              <a
+              <DownloadLink
                 href={api.downloadXrdChartPngUrl(runId, activeCand?.phase_id)}
                 download={`matlens_${runId}_xrd_analysis.png`}
                 className="inline-flex items-center gap-1.5 font-semibold transition-colors rounded-[10px] min-h-[38px] px-3 py-1.5 text-[12px] bg-[#EFF6FF] text-[#1D4ED8] hover:bg-[#DBEAFE] border border-[#BFDBFE] cursor-pointer"
@@ -511,7 +512,7 @@ export function XrdView({
               >
                 <Download className="w-3.5 h-3.5 text-[#1D4ED8]" />
                 XRD 이미지 다운로드 (PNG)
-              </a>
+              </DownloadLink>
             </div>
           </div>
 
@@ -982,13 +983,13 @@ export function XrdView({
               부적합 피크(겹침, 낮은 SNR, 고각 &gt;65°, 피팅 실패)는 무리하게 계산하지 않고 제외 사유를 명시합니다.
             </p>
           </div>
-          <a
+          <DownloadLink
             href={api.downloadXrdCsvUrl(runId)}
             className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-[#3182F6] hover:underline min-h-[44px] px-3"
           >
             <Download className="w-4 h-4" />
             피크 목록 CSV 다운로드
-          </a>
+          </DownloadLink>
         </div>
 
         {/* Scherrer Assumptions Disclosure */}

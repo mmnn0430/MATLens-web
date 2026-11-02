@@ -1,3 +1,4 @@
+import { DownloadLink } from "./DownloadLink";
 import { useEffect, useState } from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import {
@@ -258,14 +259,14 @@ export function IntegratedReportView({
           </p>
         </div>
         <div className="flex flex-wrap gap-2.5">
-          <a href={api.downloadPdfUrl(run.id)}>
+          <DownloadLink href={api.downloadPdfUrl(run.id)}>
             <Button type="button" variant="primary" size="md">
               <FileText className="w-4 h-4" />
               리포트 다운로드 (PDF)
             </Button>
-          </a>
+          </DownloadLink>
           {xrd && (
-            <a
+            <DownloadLink
               href={api.downloadXrdChartPngUrl(run.id, topPhase?.phase_id)}
               download={`matlens_${run.id}_xrd_chart.png`}
               title="상 후보, 각 피크 위치(2θ, hkl) 및 Bragg 기준선이 포함된 고해상도(300 DPI) XRD 분석 차트 이미지 다운로드"
@@ -274,38 +275,38 @@ export function IntegratedReportView({
                 <ImageIcon className="w-4 h-4 text-[#2563EB]" />
                 XRD 분석 차트 이미지 (PNG)
               </Button>
-            </a>
+            </DownloadLink>
           )}
           {xrd && (
-            <a href={api.downloadXrdCsvUrl(run.id)}>
+            <DownloadLink href={api.downloadXrdCsvUrl(run.id)}>
               <Button type="button" variant="outline" size="md">
                 <FileSpreadsheet className="w-4 h-4" />
                 XRD 피크 CSV
               </Button>
-            </a>
+            </DownloadLink>
           )}
           {sem && (
-            <a href={api.downloadSemCsvUrl(run.id)}>
+            <DownloadLink href={api.downloadSemCsvUrl(run.id)}>
               <Button type="button" variant="outline" size="md">
                 <FileSpreadsheet className="w-4 h-4" />
                 SEM 측정 CSV
               </Button>
-            </a>
+            </DownloadLink>
           )}
           {run.has_overlay && (
-            <a href={api.downloadOverlayUrl(run.id)}>
+            <DownloadLink href={api.downloadOverlayUrl(run.id)}>
               <Button type="button" variant="outline" size="md">
                 <ImageIcon className="w-4 h-4" />
                 오버레이 PNG
               </Button>
-            </a>
+            </DownloadLink>
           )}
-          <a href={api.downloadJsonUrl(run.id)}>
+          <DownloadLink href={api.downloadJsonUrl(run.id)}>
             <Button type="button" variant="outline" size="md">
               <FileJson className="w-4 h-4" />
               전체 결과 JSON
             </Button>
-          </a>
+          </DownloadLink>
         </div>
       </Card>
 
@@ -346,7 +347,7 @@ export function IntegratedReportView({
             <div className="flex items-center justify-between">
               <h4 className="text-[14px] font-bold text-[#191F28]">XRD 관찰 요약</h4>
               {xrd && (
-                <a
+                <DownloadLink
                   href={api.downloadXrdChartPngUrl(run.id, topPhase?.phase_id)}
                   download={`matlens_${run.id}_xrd_chart.png`}
                   className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#1D4ED8] hover:text-[#1E40AF] hover:underline"
@@ -354,7 +355,7 @@ export function IntegratedReportView({
                 >
                   <ImageIcon className="w-3.5 h-3.5 text-[#2563EB]" />
                   XRD 차트 이미지 받기
-                </a>
+                </DownloadLink>
               )}
             </div>
             {rule.xrd_facts?.length ? (

@@ -1,3 +1,4 @@
+import { downloadFile } from "./download";
 import type {
   DesktopFileInfo,
   HealthInfo,
@@ -241,67 +242,27 @@ export const api = {
     return handleJson<any>(r);
   },
 
-  downloadUtmChart: async (payload: any) => {
-    const r = await fetch("/api/utm/download/chart", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!r.ok) throw new Error("차트 다운로드에 실패했습니다.");
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "utm_analysis_charts.png";
-    a.click();
-    URL.revokeObjectURL(url);
-  },
+  downloadUtmChart: (payload: any) => downloadFile("/api/utm/download/chart", "utm_analysis_charts.png", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }),
 
-  downloadUtmCsv: async (payload: any) => {
-    const r = await fetch("/api/utm/download/csv", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!r.ok) throw new Error("CSV 다운로드에 실패했습니다.");
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "utm_converted_data.csv";
-    a.click();
-    URL.revokeObjectURL(url);
-  },
+  downloadUtmCsv: (payload: any) => downloadFile("/api/utm/download/csv", "utm_converted_data.csv", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }),
 
-  downloadUtmJson: async (payload: any) => {
-    const r = await fetch("/api/utm/download/json", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!r.ok) throw new Error("JSON 다운로드에 실패했습니다.");
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "utm_analysis_result.json";
-    a.click();
-    URL.revokeObjectURL(url);
-  },
+  downloadUtmJson: (payload: any) => downloadFile("/api/utm/download/json", "utm_analysis_result.json", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }),
 
-  downloadUtmPdf: async (payload: any) => {
-    const r = await fetch("/api/utm/download/pdf", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!r.ok) throw new Error("PDF 리포트 다운로드에 실패했습니다.");
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "utm_analysis_report.pdf";
-    a.click();
-    URL.revokeObjectURL(url);
-  },
+  downloadUtmPdf: (payload: any) => downloadFile("/api/utm/download/pdf", "utm_analysis_report.pdf", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }),
 };

@@ -1,3 +1,4 @@
+import { DownloadLink } from "./DownloadLink";
 import React, { useMemo, useState } from "react";
 import { RefreshCw, Download, CheckCircle2, Eye, ChevronRight, Sparkles, MapPin } from "lucide-react";
 import { api } from "../api";
@@ -327,13 +328,13 @@ export function SemView({
                 <Eye className="w-4 h-4" />
                 {showOverlay ? "분할 경계 표시 중" : "원본 ROI 보기"}
               </Button>
-              <a
+              <DownloadLink
                 href={api.downloadOverlayUrl(runId)}
                 className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-[#3182F6] hover:underline px-2.5 min-h-[44px]"
               >
                 <Download className="w-4 h-4" />
                 오버레이 저장
-              </a>
+              </DownloadLink>
             </div>
           </div>
 
@@ -959,13 +960,13 @@ export function SemView({
                 면적, 등가원 직경, 장축·단축, 종횡비, 원형도(4πA/P²) 측정값 (단위: {unit}, {sc.area_unit})
               </p>
             </div>
-            <a
+            <DownloadLink
               href={api.downloadSemCsvUrl(runId)}
               className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-[#3182F6] hover:underline min-h-[44px] px-3"
             >
               <Download className="w-4 h-4" />
               객체별 측정값 CSV 다운로드
-            </a>
+            </DownloadLink>
           </div>
 
           <div className="overflow-x-auto">

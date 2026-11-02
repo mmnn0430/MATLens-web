@@ -1,5 +1,7 @@
 # MatLens Render 배포 점검 — 2026-11-02 (KST)
 
+최신 다운로드 재점검 및 수정 결과: [DOWNLOAD_AUDIT_2026-11-02.md](DOWNLOAD_AUDIT_2026-11-02.md). 기존 항목 중 다운로드 상태는 이 후속 문서를 우선한다.
+
 대상: https://matlens-web.onrender.com
 저장소: https://github.com/mmnn0430/MATLens-web
 수정 브랜치: codex/deployment-audit-fixes (기준 52e1bc9)

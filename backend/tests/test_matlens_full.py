@@ -316,7 +316,7 @@ def test_e2e_api_workflow_downloads_and_cleanup(client: TestClient):
 
     # 4) Start Run #1 (AI disabled -> works without API key)
     run_req = {
-        "xrd_params": proj["current_conditions"]["xrd_params"],
+        "xrd_params": {**proj["current_conditions"]["xrd_params"], "use_mp_live": False},
         "sem_params": proj["current_conditions"]["sem_params"],
         "run_ai_interpretation": False,
     }
@@ -355,6 +355,16 @@ def test_e2e_api_workflow_downloads_and_cleanup(client: TestClient):
     ov_res = client.get(f"/api/runs/{run_id}/download/overlay.png")
     assert ov_res.status_code == 200
     assert ov_res.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+    # Real PNG generation must be tested, including the selected phase path.
+    for suffix in ["", "?candidate_id=REF-TIO2-RUT"]:
+        chart = client.get(f"/api/runs/{run_id}/download/xrd-chart.png{suffix}")
+        assert chart.status_code == 200
+        assert chart.headers["content-type"].startswith("image/png")
+        assert "attachment" in chart.headers["content-disposition"]
+        with Image.open(io.BytesIO(chart.content)) as im:
+            assert im.width > 2000 and im.height > 1000
+            im.verify()
 
     # 6) Same-sample restriction check: uncheck is_same_sample and run Run #2
     client.patch(f"/api/projects/{pid}", json={"is_same_sample": False})

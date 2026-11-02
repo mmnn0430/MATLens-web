@@ -4,6 +4,7 @@ Generates publication-quality (300 DPI) PNG charts matching standard crystallogr
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from typing import Any
 import numpy as np
 
@@ -19,7 +20,7 @@ def _setup_korean_font() -> None:
     if bundled_font.exists():
         try:
             fm.fontManager.addfont(str(bundled_font))
-            matplotlib.rcParams["font.family"] = "NanumGothic"
+            matplotlib.rcParams["font.family"] = ["NanumGothic", "DejaVu Sans"]
             matplotlib.rcParams["axes.unicode_minus"] = False
             return
         except Exception:
@@ -28,7 +29,7 @@ def _setup_korean_font() -> None:
     available = {f.name for f in fm.fontManager.ttflist}
     for candidate in ["NanumGothic", "Malgun Gothic", "Noto Sans KR", "Gulim", "AppleGothic", "DejaVu Sans"]:
         if candidate in available:
-            matplotlib.rcParams["font.family"] = candidate
+            matplotlib.rcParams["font.family"] = [candidate, "DejaVu Sans"]
             break
     matplotlib.rcParams["axes.unicode_minus"] = False
 
