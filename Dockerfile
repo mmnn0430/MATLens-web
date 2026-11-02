@@ -12,12 +12,15 @@ RUN npm run build
 FROM python:3.11-slim AS runner
 WORKDIR /app
 
-# Install system dependencies for OpenCV and scientific libs
+# Install system dependencies for OpenCV, scientific libs, and Korean fonts
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libgl1 \
     libglib2.0-0 \
     libgomp1 \
+    fonts-nanum \
+    fonts-nanum-extra \
+    fontconfig \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel

@@ -15,8 +15,18 @@ import matplotlib.font_manager as fm
 
 def _setup_korean_font() -> None:
     """Set reliable Korean font in matplotlib for Windows/Linux."""
+    bundled_font = Path(__file__).resolve().parent.parent.parent / "assets" / "fonts" / "NanumGothic.ttf"
+    if bundled_font.exists():
+        try:
+            fm.fontManager.addfont(str(bundled_font))
+            matplotlib.rcParams["font.family"] = "NanumGothic"
+            matplotlib.rcParams["axes.unicode_minus"] = False
+            return
+        except Exception:
+            pass
+
     available = {f.name for f in fm.fontManager.ttflist}
-    for candidate in ["Malgun Gothic", "Noto Sans KR", "NanumGothic", "Gulim", "AppleGothic", "DejaVu Sans"]:
+    for candidate in ["NanumGothic", "Malgun Gothic", "Noto Sans KR", "Gulim", "AppleGothic", "DejaVu Sans"]:
         if candidate in available:
             matplotlib.rcParams["font.family"] = candidate
             break

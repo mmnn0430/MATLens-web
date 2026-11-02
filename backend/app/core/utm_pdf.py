@@ -25,6 +25,7 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+from app.engine.pdf_export import _register_korean_font
 
 
 def generate_utm_charts_image(analysis_result: Dict[str, Any], title: str = "UTM Tensile Test Analysis") -> bytes:
@@ -135,6 +136,8 @@ def generate_utm_pdf_report(
         bottomMargin=36,
     )
 
+    font_reg, font_bold, font_path = _register_korean_font()
+
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
         "UTMTitle",
@@ -142,7 +145,7 @@ def generate_utm_pdf_report(
         fontSize=20,
         leading=24,
         textColor=colors.HexColor("#1E3A8A"),
-        fontName="Helvetica-Bold",
+        fontName=font_bold,
     )
     subtitle_style = ParagraphStyle(
         "UTMSubtitle",
@@ -150,7 +153,7 @@ def generate_utm_pdf_report(
         fontSize=10,
         leading=14,
         textColor=colors.HexColor("#64748B"),
-        fontName="Helvetica",
+        fontName=font_reg,
     )
     h2_style = ParagraphStyle(
         "UTMH2",
@@ -158,7 +161,7 @@ def generate_utm_pdf_report(
         fontSize=12,
         leading=16,
         textColor=colors.HexColor("#1E293B"),
-        fontName="Helvetica-Bold",
+        fontName=font_bold,
         spaceBefore=10,
         spaceAfter=6,
     )
@@ -168,7 +171,7 @@ def generate_utm_pdf_report(
         fontSize=9,
         leading=13,
         textColor=colors.HexColor("#334155"),
-        fontName="Helvetica",
+        fontName=font_reg,
     )
 
     story = []
@@ -245,7 +248,8 @@ def generate_utm_pdf_report(
         TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EFF6FF")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#1D4ED8")),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 0), (-1, -1), font_reg),
+            ("FONTNAME", (0, 0), (-1, 0), font_bold),
             ("FONTSIZE", (0, 0), (-1, -1), 8),
             ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
             ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#BFDBFE")),

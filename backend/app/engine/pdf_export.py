@@ -20,9 +20,12 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Image as RLImage, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
+_BUNDLED_FONT_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "fonts"
+
 _FONT_Candidates = [
-    ("MalgunGothic", "C:/Windows/Fonts/malgun.ttf", "C:/Windows/Fonts/malgunbd.ttf"),
+    ("NanumGothic", str(_BUNDLED_FONT_DIR / "NanumGothic.ttf"), str(_BUNDLED_FONT_DIR / "NanumGothicBold.ttf")),
     ("NanumGothic", "/usr/share/fonts/truetype/nanum/NanumGothic.ttf", "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"),
+    ("MalgunGothic", "C:/Windows/Fonts/malgun.ttf", "C:/Windows/Fonts/malgunbd.ttf"),
     ("NotoSansKR", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"),
 ]
 
@@ -32,14 +35,22 @@ def _register_korean_font() -> tuple[str, str, str | None]:
     for fam, reg_p, bold_p in _FONT_Candidates:
         if Path(reg_p).exists():
             try:
+                # Add to matplotlib font manager
+                font_manager.fontManager.addfont(str(reg_p))
+                if Path(bold_p).exists():
+                    font_manager.fontManager.addfont(str(bold_p))
+                matplotlib.rcParams["font.family"] = fam
+                matplotlib.rcParams["axes.unicode_minus"] = False
+
+                # Register with ReportLab
                 if fam not in pdfmetrics.getRegisteredFontNames():
-                    pdfmetrics.registerFont(TTFont(fam, reg_p))
+                    pdfmetrics.registerFont(TTFont(fam, str(reg_p)))
                 bold_name = fam
                 if Path(bold_p).exists():
                     bold_name = f"{fam}-Bold"
                     if bold_name not in pdfmetrics.getRegisteredFontNames():
-                        pdfmetrics.registerFont(TTFont(bold_name, bold_p))
-                return fam, bold_name, reg_p
+                        pdfmetrics.registerFont(TTFont(bold_name, str(bold_p)))
+                return fam, bold_name, str(reg_p)
             except Exception:
                 continue
     return "Helvetica", "Helvetica-Bold", None
