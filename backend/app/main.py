@@ -1507,9 +1507,9 @@ def serve_index_with_ai_fallback(
         # Update meta title and description cleanly (prevent awkward [샘플] labels)
         if project or run:
             clean_name = re.sub(r"^\[.*?\]\s*", "", ctx.get("sample_name") or "").strip() or "재료 분석"
-            clean_title = f"MatLens — {clean_name} 재료 분석 리포트 (XRD × SEM)"
+            clean_title = f"MatLens — {clean_name} 재료 분석 리포트"
         else:
-            clean_title = "MatLens — 재료 분석 통합 솔루션 (XRD × SEM)"
+            clean_title = "MatLens — 재료 분석 통합 솔루션"
 
         base_html = re.sub(r"<title>.*?</title>", f"<title>{clean_title}</title>", base_html)
         base_html = re.sub(r'<meta property="og:title" content=".*?" />', f'<meta property="og:title" content="{clean_title}" />', base_html)
