@@ -22,6 +22,8 @@ export function UtmView() {
   const [, setFile] = useState<File | null>(null);
   const [parsedData, setParsedData] = useState<UTMParsedData | null>(null);
   const [analysisResult, setAnalysisResult] = useState<UTMAnalysisResult | null>(null);
+  const [analyzedRequest, setAnalyzedRequest] = useState<Parameters<typeof api.analyzeUtm>[0] | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -53,6 +55,8 @@ export function UtmView() {
     setErrorMsg(null);
     setIsParsing(true);
     setAnalysisResult(null);
+    setParsedData(null);
+    setAnalyzedRequest(null);
     try {
       const parsed = await api.parseUtm(selectedFile);
       setParsedData(parsed);
@@ -61,13 +65,19 @@ export function UtmView() {
       setAnalysisName(selectedFile.name.replace(/\.[^/.]+$/, "") + " 인장시험 분석");
 
       // Auto run first analysis
-      const res = await api.analyzeUtm({
+      const request = {
         parsed_data: parsed,
         start_index: 0,
         end_index: parsed.row_count,
+        specimen_area_A0: useSpecimenDim && Number(specimenA0) > 0 ? Number(specimenA0) : undefined,
+        specimen_gauge_L0: useSpecimenDim && Number(specimenL0) > 0 ? Number(specimenL0) : undefined,
+        elastic_start_strain_pct: Number.isNaN(parseFloat(elasticStartPct)) ? undefined : parseFloat(elasticStartPct),
+        elastic_end_strain_pct: Number.isNaN(parseFloat(elasticEndPct)) ? undefined : parseFloat(elasticEndPct),
         analysis_name: selectedFile.name,
-        calc_offset_yield: true,
-      });
+        calc_offset_yield: calcOffsetYield,
+      };
+      const res = await api.analyzeUtm(request);
+      setAnalyzedRequest(request);
       setAnalysisResult(res);
     } catch (err: any) {
       setErrorMsg(err?.message || "파일 파싱에 실패했습니다.");
@@ -87,7 +97,7 @@ export function UtmView() {
       const e_start = parseFloat(elasticStartPct);
       const e_end = parseFloat(elasticEndPct);
 
-      const res = await api.analyzeUtm({
+      const request = {
         parsed_data: parsedData,
         start_index: startIndex,
         end_index: endIndex,
@@ -98,7 +108,9 @@ export function UtmView() {
         calc_offset_yield: calcOffsetYield,
         analysis_name: analysisName,
         notes: notes,
-      });
+      };
+      const res = await api.analyzeUtm(request);
+      setAnalyzedRequest(request);
       setAnalysisResult(res);
     } catch (err: any) {
       setErrorMsg(err?.message || "분석 계산에 실패했습니다.");
@@ -118,6 +130,21 @@ export function UtmView() {
     analysisName,
     notes,
   ]);
+
+  // Export the parameters that produced the visible result, including dimensions
+  // and regression bounds. Unsaved form edits must not silently change exports.
+  const downloadResult = async (download: (payload: any) => Promise<void>) => {
+    if (!analyzedRequest) return;
+    setIsDownloading(true);
+    setErrorMsg(null);
+    try {
+      await download({ ...analyzedRequest, analysis_name: analysisName, notes });
+    } catch (err: any) {
+      setErrorMsg(err?.message || "다운로드에 실패했습니다.");
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   // Trim negative loads preset
   const handleExcludeNegativeLoads = () => {
@@ -175,9 +202,9 @@ export function UtmView() {
       plotColor = "#0284C7";
     } else {
       xData = curves.time;
-      yData = curves.load_raw;
+      yData = curves.load_N;
       xLabel = "시간 Time (sec)";
-      yLabel = "하중 Load (kgf)";
+      yLabel = "하중 Load (N)";
       plotColor = "#7C3AED";
     }
 
@@ -789,7 +816,7 @@ export function UtmView() {
                 </div>
 
                 <div className="text-[12px] text-[#64748B]">
-                  기준: {chartTab === "stress_strain" ? "공칭 변형률(%) · 공칭 응력(MPa)" : chartTab === "load_disp" ? "변위(mm) · 하중(N)" : "시간(sec) · 하중(kgf)"}
+                  기준: {chartTab === "stress_strain" ? "공칭 변형률(%) · 공칭 응력(MPa)" : chartTab === "load_disp" ? "변위(mm) · 하중(N)" : "시간(sec) · 하중(N)"}
                 </div>
               </div>
 
@@ -818,68 +845,39 @@ export function UtmView() {
                 <div className="text-[13px] font-bold text-[#191F28] flex items-center gap-2">
                   <Download className="w-4 h-4 text-[#3182F6]" />
                   <span>UTM 전용 결과 다운로드</span>
+                  <span className="text-[12px] font-normal text-[#6B7684]">마지막 계산 결과 기준 · 조건 변경 후 재계산해주세요.</span>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() =>
-                      api.downloadUtmChart({
-                        parsed_data: parsedData,
-                        start_index: startIndex,
-                        end_index: endIndex,
-                        analysis_name: analysisName,
-                        calc_offset_yield: calcOffsetYield,
-                      })
-                    }
+                    disabled={isDownloading || isAnalyzing || isParsing || !analyzedRequest}
+                    onClick={() => downloadResult(api.downloadUtmChart)}
                   >
                     <span>그래프 PNG</span>
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() =>
-                      api.downloadUtmCsv({
-                        parsed_data: parsedData,
-                        start_index: startIndex,
-                        end_index: endIndex,
-                        analysis_name: analysisName,
-                        calc_offset_yield: calcOffsetYield,
-                      })
-                    }
+                    disabled={isDownloading || isAnalyzing || isParsing || !analyzedRequest}
+                    onClick={() => downloadResult(api.downloadUtmCsv)}
                   >
                     <span>변환 데이터 CSV</span>
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() =>
-                      api.downloadUtmJson({
-                        parsed_data: parsedData,
-                        start_index: startIndex,
-                        end_index: endIndex,
-                        analysis_name: analysisName,
-                        notes: notes,
-                        calc_offset_yield: calcOffsetYield,
-                      })
-                    }
+                    disabled={isDownloading || isAnalyzing || isParsing || !analyzedRequest}
+                    onClick={() => downloadResult(api.downloadUtmJson)}
                   >
                     <span>결과 JSON</span>
                   </Button>
                   <Button
                     size="sm"
                     variant="primary"
-                    onClick={() =>
-                      api.downloadUtmPdf({
-                        parsed_data: parsedData,
-                        start_index: startIndex,
-                        end_index: endIndex,
-                        analysis_name: analysisName,
-                        notes: notes,
-                        calc_offset_yield: calcOffsetYield,
-                      })
-                    }
+                    disabled={isDownloading || isAnalyzing || isParsing || !analyzedRequest}
+                    onClick={() => downloadResult(api.downloadUtmPdf)}
                   >
                     <span>UTM 리포트 PDF</span>
                   </Button>

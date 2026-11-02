@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 from typing import Any, Dict, Optional
+from xml.sax.saxutils import escape
 
 import matplotlib
 matplotlib.use("Agg")
@@ -43,7 +44,7 @@ def generate_utm_charts_image(analysis_result: Dict[str, Any], title: str = "UTM
     elastic = analysis_result.get("elastic_modulus") or {}
     offset_y = analysis_result.get("offset_yield") or {}
 
-    plt.rcParams["font.sans-serif"] = ["Malgun Gothic", "Pretendard", "DejaVu Sans", "Arial"]
+    _register_korean_font()
     plt.rcParams["axes.unicode_minus"] = False
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), dpi=150)
@@ -101,11 +102,11 @@ def generate_utm_charts_image(analysis_result: Dict[str, Any], title: str = "UTM
 
     # 3. Time - Load curve
     ax3 = axes[2]
-    if time_sec and load_raw:
-        ax3.plot(time_sec, load_raw, color="#7C3AED", lw=1.6, label="Raw Load")
+    if time_sec and load_N:
+        ax3.plot(time_sec, load_N, color="#7C3AED", lw=1.6, label="Load (N)")
         ax3.axhline(0, color="#94A3B8", linestyle=":", lw=1)
         ax3.set_xlabel("Time (sec)", fontweight="bold", fontsize=10)
-        ax3.set_ylabel("Load (kgf)", fontweight="bold", fontsize=10)
+        ax3.set_ylabel("Load (N)", fontweight="bold", fontsize=10)
         ax3.set_title("Time vs Load", fontweight="bold", fontsize=11, color="#1E293B")
         ax3.grid(True, linestyle="--", alpha=0.5)
         ax3.legend(fontsize=8, loc="best")
@@ -180,7 +181,7 @@ def generate_utm_pdf_report(
     story.append(Paragraph("MatLens UTM Tensile Test Analysis Report", title_style))
     story.append(Spacer(1, 4))
     story.append(
-        Paragraph(f"Analysis: {analysis_name} | File: {file_name} | Standard Unit: MPa / N / %", subtitle_style)
+        Paragraph(f"Analysis: {escape(analysis_name)} | File: {escape(file_name)} | Standard Unit: MPa / N / %", subtitle_style)
     )
     story.append(Spacer(1, 10))
     story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#3B82F6"), spaceAfter=12))
@@ -192,13 +193,16 @@ def generate_utm_pdf_report(
         ["Total Row Count", f"{rng.get('total_count', 0)} rows", "Analyzed Slice", f"{rng.get('count', 0)} rows ({rng.get('start_idx', 0)+1}~{rng.get('end_idx', 0)})"],
         ["User Notes", notes or "None", "Conversion Standard", "kgf*9.80665=N, kgf/mm2*9.80665=MPa"],
     ]
+    cell_style = ParagraphStyle("UTMCell", parent=body_style, fontSize=8, leading=11, wordWrap="CJK")
+    meta_data = [[Paragraph(escape(str(value)), cell_style) for value in row] for row in meta_data]
     t_meta = Table(meta_data, colWidths=[90, 170, 100, 160])
     t_meta.setStyle(
         TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
             ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#1E293B")),
-            ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-            ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+            ("FONTNAME", (0, 0), (-1, -1), font_reg),
+            ("FONTNAME", (0, 0), (0, -1), font_bold),
+            ("FONTNAME", (2, 0), (2, -1), font_bold),
             ("FONTSIZE", (0, 0), (-1, -1), 8),
             ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
             ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#CBD5E1")),
@@ -243,6 +247,7 @@ def generate_utm_pdf_report(
             offset_y.get("method", "Not verified"),
         ],
     ]
+    metric_rows = [[Paragraph(escape(str(value)), cell_style) for value in row] for row in metric_rows]
     t_metric = Table(metric_rows, colWidths=[130, 90, 150, 150])
     t_metric.setStyle(
         TableStyle([

@@ -26,17 +26,20 @@ from ..schemas import ROIRect, SEMParams
 def load_sem_grayscale_and_rgb(raw: bytes) -> tuple[np.ndarray, np.ndarray, str]:
     """Decode JPG/PNG safely, enforce max pixel count, and return (gray_uint8, rgb_uint8, format)."""
     Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
-    with Image.open(io.BytesIO(raw)) as im:
-        fmt = (im.format or "PNG").upper()
-        w, h = im.size
-        if w * h > MAX_IMAGE_PIXELS:
-            raise ValueError(
-                f"이미지 해상도({w}×{h} = {w * h:,} px)가 허용 상한({MAX_IMAGE_PIXELS:,} px)을 초과합니다."
-            )
-        if w < 32 or h < 32:
-            raise ValueError(f"이미지 크기({w}×{h} px)가 너무 작아 분석할 수 없습니다 (최소 32×32 px).")
-        rgb = np.asarray(im.convert("RGB"), dtype=np.uint8)
-        gray = np.asarray(im.convert("L"), dtype=np.uint8)
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            fmt = (im.format or "PNG").upper()
+            w, h = im.size
+            if w * h > MAX_IMAGE_PIXELS:
+                raise ValueError(
+                    f"이미지 해상도({w}×{h} = {w * h:,} px)가 허용 상한({MAX_IMAGE_PIXELS:,} px)을 초과합니다."
+                )
+            if w < 32 or h < 32:
+                raise ValueError(f"이미지 크기({w}×{h} px)가 너무 작아 분석할 수 없습니다 (최소 32×32 px).")
+            rgb = np.asarray(im.convert("RGB"), dtype=np.uint8)
+            gray = np.asarray(im.convert("L"), dtype=np.uint8)
+    except (OSError, Image.DecompressionBombError) as exc:
+        raise ValueError("SEM 이미지 파일을 읽을 수 없습니다. 손상 여부와 실제 이미지 형식을 확인해주세요.") from exc
     return gray, rgb, fmt
 
 
