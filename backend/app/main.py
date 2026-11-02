@@ -1315,6 +1315,13 @@ def _build_ai_semantic_html(ctx: dict[str, Any], base_url: str) -> str:
     xrd_csv_url = f"{base_url}/api/runs/{run_id}/download/xrd-peaks.csv"
     json_url = f"{base_url}/api/runs/{run_id}/download/result.json"
 
+    doping_html = f'<p style="margin: 4px 0; color: #1D4ED8;"><strong>도핑/치환 특이사항:</strong> {", ".join(doping_notes)}</p>' if doping_notes else ""
+    process_html = f'<p style="margin: 4px 0; color: #475569;"><strong>공정 이력 힌트:</strong> {", ".join(process_hints)}</p>' if process_hints else ""
+    target_badge_str = f"({target_badge})" if target_badge else ""
+    scherrer_html = f'<div style="color: #334155; font-size: 13px; margin-top: 4px;">Scherrer 평균 결정자 크기: <strong>{sch_nm} nm</strong></div>' if sch_nm else ""
+    interp_html = f'<div style="background: #F1F5F9; padding: 10px 14px; border-radius: 6px; font-size: 13px; margin-bottom: 14px;"><strong>시료 설명 조성 연계 해석:</strong> {interp_guide}</div>' if interp_guide else ""
+    sem_circ_html = f'<p style="margin: 4px 0;"><strong>중앙 원형도 (Circularity):</strong> {sem_circ}</p>' if sem_circ is not None else ""
+
     parts = [
         '<article id="matlens-ai-readable-report" style="font-family: Pretendard, system-ui, -apple-system, sans-serif; line-height: 1.6; color: #0F172A; max-width: 900px; margin: 0 auto; padding: 24px; background: #FFFFFF;">',
         '  <header style="border-bottom: 2px solid #2563EB; padding-bottom: 14px; margin-bottom: 20px;">',
@@ -1328,18 +1335,18 @@ def _build_ai_semantic_html(ctx: dict[str, Any], base_url: str) -> str:
         f'    <p style="margin: 4px 0;"><strong>시료 설명 및 공정 이력:</strong> {description}</p>',
         f'    <p style="margin: 4px 0;"><strong>명목 목표 조성(Nominal Formula):</strong> <code style="background:#E2E8F0;padding:2px 6px;border-radius:4px;">{nominal_formula}</code></p>',
         f'    <p style="margin: 4px 0;"><strong>원소계:</strong> {exp_elements_str}</p>',
-        f'    {f"<p style=\"margin: 4px 0; color: #1D4ED8;\"><strong>도핑/치환 특이사항:</strong> {', '.join(doping_notes)}</p>" if doping_notes else ""}',
-        f'    {f"<p style=\"margin: 4px 0; color: #475569;\"><strong>공정 이력 힌트:</strong> {', '.join(process_hints)}</p>" if process_hints else ""}',
+        f'    {doping_html}',
+        f'    {process_html}',
         '  </section>',
 
         '  <section style="background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; padding: 16px; margin-bottom: 20px;">',
         '    <h2 style="font-size: 17px; color: #1E293B; margin: 0 0 10px 0;">2. XRD 회절 패턴 및 결정상 분석 결과</h2>',
         '    <div style="background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 6px; padding: 12px; margin-bottom: 14px;">',
-        f'      <div style="font-weight: bold; color: #1E40AF; font-size: 15px;">1순위 정합 상: {top_name} [{top_spg}] — 매칭 점수 {top_score}점 {f"({target_badge})" if target_badge else ""}</div>',
+        f'      <div style="font-weight: bold; color: #1E40AF; font-size: 15px;">1순위 정합 상: {top_name} [{top_spg}] — 매칭 점수 {top_score}점 {target_badge_str}</div>',
         f'      <div style="color: #2563EB; font-size: 13px; margin-top: 4px;">{comp_note}</div>',
-        f'      {f"<div style=\"color: #334155; font-size: 13px; margin-top: 4px;\">Scherrer 평균 결정자 크기: <strong>{sch_nm} nm</strong></div>" if sch_nm else ""}',
+        f'      {scherrer_html}',
         '    </div>',
-        f'    {f"<div style=\"background: #F1F5F9; padding: 10px 14px; border-radius: 6px; font-size: 13px; margin-bottom: 14px;\"><strong>시료 설명 조성 연계 해석:</strong> {interp_guide}</div>" if interp_guide else ""}',
+        f'    {interp_html}',
         '    <h3 style="font-size: 14px; margin: 12px 0 6px 0;">검출 피크 목록 (밀러 지수 및 조성 역할 귀속)</h3>',
         '    <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: center;">',
         '      <thead style="background: #F8FAFC; color: #475569;">',
@@ -1355,7 +1362,7 @@ def _build_ai_semantic_html(ctx: dict[str, Any], base_url: str) -> str:
             '  <section style="background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; padding: 16px; margin-bottom: 20px;">',
             f'    <h2 style="font-size: 17px; color: #1E293B; margin: 0 0 10px 0;">3. SEM 미세구조 분석 결과 ({sem_mode})</h2>',
             f'    <p style="margin: 4px 0;"><strong>대표 결정립 직경 (D50):</strong> {sem_d50} {sem_unit} (검출 수 N={sem_count})</p>',
-            f'    {f"<p style=\"margin: 4px 0;\"><strong>중앙 원형도 (Circularity):</strong> {sem_circ}</p>" if sem_circ is not None else ""}',
+            f'    {sem_circ_html}',
             '  </section>',
         ])
 
