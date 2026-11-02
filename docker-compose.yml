@@ -1,0 +1,29 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - MATLENS_MAX_UPLOAD_MB=${MATLENS_MAX_UPLOAD_MB:-25}
+      - MATLENS_MAX_IMAGE_PIXELS=${MATLENS_MAX_IMAGE_PIXELS:-25000000}
+      - MATLENS_STORAGE_DIR=/workspace/backend/storage
+    volumes:
+      - matlens_storage:/workspace/backend/storage
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+    restart: unless-stopped
+
+volumes:
+  matlens_storage:

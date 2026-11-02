@@ -1,0 +1,19 @@
+services:
+  matlens:
+    build: .
+    ports:
+      - "127.0.0.1:8018:8018"
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-}
+      MP_API_KEY: ${MP_API_KEY:-}
+    volumes:
+      - matlens-data:/app/runtime
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8018/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  matlens-data:

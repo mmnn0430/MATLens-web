@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+python-multipart
+numpy
+pandas
+scipy
+opencv-python-headless
+scikit-image
+pymatgen
+google-genai
+Pillow
+reportlab
+pytest
+httpx
+python-dotenv
+pymupdf

@@ -1,0 +1,4 @@
+[
+  {"id":"COD-9008566","file":"silicon.cif","name":"Silicon · Si","source":"Wyckoff (1963), Crystal Structures 1, 7–83. COD 9008566 / Avogadro public-domain mirror. CIF reports T=1573 K; demonstration reference only.","url":"https://github.com/cryos/avogadro/blob/master/crystals/elements/Si-Silicon.cif"},
+  {"id":"COD-9008468","file":"copper.cif","name":"Copper · Cu","source":"Wyckoff (1963), Crystal Structures 1, 7–83. COD 9008468 / Avogadro public-domain mirror.","url":"https://github.com/cryos/avogadro/blob/master/crystals/elements/Cu-Copper.cif"}
+]

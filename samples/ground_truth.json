@@ -1,0 +1,72 @@
+{
+  "sample_anatase_rutile_xrd": {
+    "phases": [
+      "Anatase (TiO2)",
+      "Rutile (TiO2)"
+    ],
+    "anatase_crystallite_nm": 24.0,
+    "anatase_microstrain": 0.001,
+    "rutile_crystallite_nm": 38.0,
+    "inst_fwhm_deg": 0.08,
+    "wavelength_A": 1.5406
+  },
+  "sample_silicon_srm640_xrd": {
+    "phase": "Silicon (Si, NIST SRM 640 기준계)",
+    "lattice_a_A": 5.43119,
+    "crystallite_nm": 55.0,
+    "inst_fwhm_deg": 0.06,
+    "true_peaks": [
+      {
+        "two_theta": 28.4411,
+        "hkl": "(111)",
+        "fwhm_deg": 0.1606
+      },
+      {
+        "two_theta": 47.3004,
+        "hkl": "(220)",
+        "fwhm_deg": 0.1687
+      },
+      {
+        "two_theta": 56.1195,
+        "hkl": "(311)",
+        "fwhm_deg": 0.1743
+      },
+      {
+        "two_theta": 69.1264,
+        "hkl": "(400)",
+        "fwhm_deg": 0.1854
+      },
+      {
+        "two_theta": 76.3723,
+        "hkl": "(331)",
+        "fwhm_deg": 0.1933
+      },
+      {
+        "two_theta": 88.025,
+        "hkl": "(422)",
+        "fwhm_deg": 0.2096
+      }
+    ]
+  },
+  "sample_tio2_particles_sem": {
+    "n_particles": 145,
+    "scale_px": 200.0,
+    "scale_nm": 500.0,
+    "nm_per_px": 2.5,
+    "true_mean_diameter_nm": 116.3,
+    "true_median_diameter_nm": 116.98,
+    "true_d10_d50_d90_nm": [
+      88.93,
+      116.98,
+      144.24
+    ],
+    "true_circularity": 1.0
+  },
+  "sample_sintered_grains_sem": {
+    "n_voronoi_grains": 95,
+    "scale_px": 200.0,
+    "scale_um": 5.0,
+    "nm_per_px": 25.0,
+    "approx_mean_grain_equiv_um": 2.57
+  }
+}

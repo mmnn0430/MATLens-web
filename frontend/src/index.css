@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --ml-bg: #F7F8FA;
+    --ml-card: #FFFFFF;
+    --ml-text: #191F28;
+    --ml-subtext: #6B7684;
+    --ml-primary: #3182F6;
+    --ml-border: #E5E8EB;
+    --ml-success: #16A34A;
+    --ml-warning: #D97706;
+    --ml-danger: #DC2626;
+  }
+
+  body {
+    font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto,
+      "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+    background-color: #F7F8FA;
+    color: #191F28;
+    margin: 0;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
