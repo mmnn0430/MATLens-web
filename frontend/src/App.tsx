@@ -24,6 +24,7 @@ import { XrdView } from "./components/XrdView";
 import { SemView } from "./components/SemView";
 import { IntegratedReportView } from "./components/IntegratedReportView";
 import { UtmView } from "./components/UtmView";
+import { UtmCompareView } from "./components/UtmCompareView";
 import { Button, SourceTag } from "./components/ui/primitives";
 
 function readUrlState() {
@@ -56,6 +57,7 @@ function writeUrlState(next: {
 
 export default function App() {
   const [serviceMode, setServiceMode] = useState<"matlens" | "utm">("matlens");
+  const [utmSubMode, setUtmSubMode] = useState<"single" | "compare">("single");
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null);
@@ -504,6 +506,11 @@ export default function App() {
                 <Layers className="w-4 h-4" />
               </span>
               <span>MatLens</span>
+              {import.meta.env.VITE_RELEASE_CHANNEL === "prototype" && (
+                <span className="px-1.5 py-0.5 rounded-md bg-[#7C3AED] text-white text-[10px] font-bold tracking-wide">
+                  PROTOTYPE
+                </span>
+              )}
             </button>
 
             {/* Service Mode Toggle Switcher */}
@@ -737,7 +744,44 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-8 py-6 sm:py-8">
         {serviceMode === "utm" ? (
-          <UtmView />
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <div className="flex p-0.5 rounded-[12px] bg-white border border-[#E5E8EB] shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setUtmSubMode("single")}
+                  className={`px-4 py-2 rounded-[10px] text-[13px] font-semibold transition-all ${
+                    utmSubMode === "single" ? "bg-[#3182F6] text-white" : "text-[#6B7684] hover:text-[#191F28]"
+                  }`}
+                >
+                  단일 시험 분석
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUtmSubMode("compare")}
+                  className={`px-4 py-2 rounded-[10px] text-[13px] font-semibold transition-all flex items-center gap-1.5 ${
+                    utmSubMode === "compare" ? "bg-[#7C3AED] text-white" : "text-[#6B7684] hover:text-[#191F28]"
+                  }`}
+                >
+                  반복 시험 비교
+                  <span
+                    className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      utmSubMode === "compare" ? "bg-white/20" : "bg-[#F5F3FF] text-[#7C3AED]"
+                    }`}
+                  >
+                    NEW
+                  </span>
+                </button>
+              </div>
+            </div>
+            {/* Keep both mounted so switching tabs does not discard uploaded data */}
+            <div className={utmSubMode === "single" ? "" : "hidden"}>
+              <UtmView />
+            </div>
+            <div className={utmSubMode === "compare" ? "" : "hidden"}>
+              <UtmCompareView />
+            </div>
+          </div>
         ) : viewMode === "setup" || !activeProject ? (
           <LandingSetup
             health={health}
