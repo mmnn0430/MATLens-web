@@ -1,8 +1,8 @@
 import { DownloadLink } from "./DownloadLink";
-import React, { useMemo, useState } from "react";
-import { RefreshCw, Download, CheckCircle2, Eye, ChevronRight, Sparkles, MapPin } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { RefreshCw, Download, CheckCircle2, Eye, ChevronRight, Sparkles, MapPin, BookOpen } from "lucide-react";
 import { api } from "../api";
-import type { SEMParams } from "../types";
+import type { LiteratureValidationReport, SEMParams } from "../types";
 import { PlotlyChart } from "./PlotlyChart";
 import { SemInteractiveCanvas } from "./SemInteractiveCanvas";
 import {
@@ -14,6 +14,9 @@ import {
   StatusBadge,
   SwitchControl,
 } from "./ui/primitives";
+import { LiteratureValidationPanel } from "./LiteratureValidationPanel";
+import { ComparisonVisualization } from "./ComparisonVisualization";
+import { ScientificInterpretationPanel } from "./ScientificInterpretationPanel";
 
 interface SemViewProps {
   runId: string;
@@ -41,6 +44,9 @@ export function SemView({
   const [isAiGrainRunning, setIsAiGrainRunning] = useState<boolean>(false);
   const [page, setPage] = useState<number>(0);
 
+  const [semLitReport, setSemLitReport] = useState<LiteratureValidationReport | null>(null);
+  const [loadingSemLit, setLoadingSemLit] = useState<boolean>(false);
+
   if (!semResult) {
     return (
       <Card className="py-16 text-center space-y-2">
@@ -60,6 +66,29 @@ export function SemView({
   const objects: any[] = semResult.objects || [];
   const pageSize = 25;
   const pagedObjects = objects.slice(page * pageSize, (page + 1) * pageSize);
+
+  const topXrdCandidate = xrdResult?.phase_matching?.candidates?.[0];
+
+  const fetchSemLiterature = useCallback(async () => {
+    if (!semResult) return;
+    setLoadingSemLit(true);
+    try {
+      const mat = topXrdCandidate?.formula || topXrdCandidate?.name || "SEM Microstructure Sample";
+      const rep = await api.validateLiterature("SEM", mat, {
+        measurement_res: semResult,
+        measurement_conditions: semParams,
+      }, topXrdCandidate?.formula, "Particle/Grain Size Distribution, Porosity, Microstructure");
+      setSemLitReport(rep);
+    } catch (err) {
+      console.error("SEM literature fetch error:", err);
+    } finally {
+      setLoadingSemLit(false);
+    }
+  }, [semResult, semParams, topXrdCandidate]);
+
+  useEffect(() => {
+    fetchSemLiterature();
+  }, [runId]);
   const pdbse = xrdResult?.phase_diagram_bse || null;
 
   const savedCond = semResult.conditions || {};
@@ -1064,6 +1093,51 @@ export function SemView({
           )}
         </Card>
       )}
+
+      {/* SEM Literature Validation Section */}
+      <CollapsiblePanel
+        title="SEM 미세조직 학술 문헌 검증 (ASTM E112 / E1382 / E562)"
+        subtitle="입자·결정립 크기 분포 및 기공률 2D/3D 면적분율 가정을 공인 표준 및 선행 연구와 대조합니다."
+      >
+        <div className="space-y-5 pt-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] text-[#6B7684]">
+              측정 방식: <strong className="text-[#191F28]">{semResult.mode_label || semResult.mode}</strong> (표본 수 N={st?.sample_count_n || 0}개)
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={loadingSemLit}
+              onClick={fetchSemLiterature}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 mr-1 ${loadingSemLit ? "animate-spin" : ""}`} />
+              문헌 재검색
+            </Button>
+          </div>
+
+          {semLitReport ? (
+            <div className="space-y-5">
+              <LiteratureValidationPanel
+                papers={semLitReport.papers}
+                validations={semLitReport.validations}
+                materialName={semLitReport.material_name}
+                instrumentType="SEM"
+                isLoading={loadingSemLit}
+              />
+
+              <ComparisonVisualization comparisons={semLitReport.comparisons} />
+
+              <ScientificInterpretationPanel report={semLitReport} />
+            </div>
+          ) : loadingSemLit ? (
+            <Card className="p-6 text-center bg-white border border-[#E5E8EB] rounded-[16px]">
+              <BookOpen className="w-5 h-5 text-[#3182F6] animate-pulse mx-auto mb-2" />
+              <p className="text-[13px] font-medium text-[#4E5968]">SEM 미세조직 표준 및 학술 문헌 검색 중...</p>
+            </Card>
+          ) : null}
+        </div>
+      </CollapsiblePanel>
     </div>
   );
 }

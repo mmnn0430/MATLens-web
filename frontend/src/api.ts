@@ -2,6 +2,9 @@ import { downloadFile } from "./download";
 import type {
   DesktopFileInfo,
   HealthInfo,
+  LiteraturePaper,
+  LiteratureValidationItem,
+  LiteratureValidationReport,
   ProjectDetail,
   ProjectListItem,
   RunDetail,
@@ -265,4 +268,73 @@ export const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   }),
+
+  // Literature Validation Endpoints
+  getRunLiteratureValidation: async (
+    projectId: string,
+    runId: string,
+    instrumentType: string = "INTEGRATED"
+  ) => {
+    const r = await fetch(
+      `/api/projects/${projectId}/runs/${runId}/literature-validation?instrument_type=${encodeURIComponent(instrumentType)}`
+    );
+    return handleJson<LiteratureValidationReport>(r);
+  },
+
+  searchLiterature: async (payload: {
+    material_name: string;
+    chemical_composition?: string | null;
+    instrument_type: "XRD" | "SEM" | "UTM" | "INTEGRATED";
+    measurement_conditions?: Record<string, any>;
+    target_property?: string;
+    analysis_result?: Record<string, any>;
+  }) => {
+    const r = await fetch("/api/literature/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<{
+      material_name: string;
+      instrument_type: string;
+      papers: LiteraturePaper[];
+      validations: LiteratureValidationItem[];
+    }>(r);
+  },
+
+  validateLiterature: async (
+    instrumentType: string,
+    materialName: string,
+    payload: { measurement_res?: any; measurement_conditions?: any },
+    chemicalComposition?: string,
+    targetProperty?: string
+  ) => {
+    const sp = new URLSearchParams({
+      instrument_type: instrumentType,
+      material_name: materialName,
+    });
+    if (chemicalComposition) sp.set("chemical_composition", chemicalComposition);
+    if (targetProperty) sp.set("target_property", targetProperty);
+
+    const r = await fetch(`/api/literature/validate?${sp.toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<LiteratureValidationReport>(r);
+  },
+
+  validateUtmLiterature: async (payload: {
+    material_name: string;
+    chemical_composition?: string | null;
+    utm_result: any;
+    conditions?: any;
+  }) => {
+    const r = await fetch("/api/utm/literature-validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<LiteratureValidationReport>(r);
+  },
 };

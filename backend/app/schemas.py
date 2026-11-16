@@ -4,6 +4,25 @@ from __future__ import annotations
 from typing import Any, Literal
 from pydantic import BaseModel, Field
 
+from .schemas_literature import (
+    AccessLevel,
+    AnalyticalReliability,
+    ComparisonMetricItem,
+    ConditionCompatibility,
+    ConditionStatus,
+    EvidenceDetail,
+    ExtractedEvidenceItem,
+    InterpretationReliability,
+    LiteraturePaper,
+    LiteratureValidationItem,
+    LiteratureValidationReport,
+    PaperMetadata,
+    ReliabilityStatus,
+    ScientificEvidenceRecord,
+    ScientificReliabilityAssessment,
+    SearchLiteratureRequest,
+)
+
 
 class CrystallinityConfig(BaseModel):
     enabled: bool = False

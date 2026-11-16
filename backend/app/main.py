@@ -19,10 +19,17 @@ import re
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
+
+from .schemas_literature import (
+    LiteratureValidationReport,
+    SearchLiteratureRequest,
+)
+from .services.literature.search import search_academic_literature
+from .services.interpretation.evidence_engine import synthesize_literature_validation_report
 
 from .config import (
     ALLOWED_CIF_EXTS,
@@ -1533,12 +1540,12 @@ def serve_index_with_ai_fallback(
 
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
-from app.core.utm_engine import (
+from .core.utm_engine import (
     parse_utm_raw_text,
     analyze_utm_dataset,
     detect_encoding,
 )
-from app.core.utm_pdf import (
+from .core.utm_pdf import (
     generate_utm_charts_image,
     generate_utm_pdf_report,
 )
@@ -1740,6 +1747,161 @@ def get_run_ai_summary(run_id: str, request: Request, format: str = Query("markd
     return PlainTextResponse(content=_build_ai_markdown_summary(ctx, base_url))
 
 
+# ==========================================
+# Literature Validation & Scientific Grounding Endpoints
+# ==========================================
+@app.post("/api/literature/search")
+async def api_literature_search(req: SearchLiteratureRequest):
+    """Search academic literature (OpenAlex, Crossref, curated benchmarks) for material/instrument."""
+    try:
+        papers, validations = await search_academic_literature(
+            material_name=req.material_name,
+            chemical_composition=req.chemical_composition,
+            instrument_type=req.instrument_type,
+            measurement_conditions=req.measurement_conditions,
+            target_property=req.target_property,
+            analysis_result=req.analysis_result,
+        )
+        return {
+            "material_name": req.material_name,
+            "instrument_type": req.instrument_type,
+            "papers": [p.model_dump() for p in papers],
+            "validations": [v.model_dump() for v in validations],
+        }
+    except Exception as e:
+        logger.exception("Literature search failed")
+        raise HTTPException(status_code=500, detail=f"문헌 검색 오류: {str(e)}")
+
+
+@app.post("/api/literature/validate", response_model=LiteratureValidationReport)
+async def api_literature_validate(
+    instrument_type: str = Query("XRD", description="XRD, SEM, UTM, or INTEGRATED"),
+    material_name: str = Query("Sample Material"),
+    chemical_composition: str | None = Query(None),
+    target_property: str = Query(""),
+    req_body: dict[str, Any] = Body(default_factory=dict),
+):
+    """Validate measurement findings against academic literature."""
+    try:
+        measurement_res = req_body.get("measurement_res") or {}
+        meas_conditions = req_body.get("measurement_conditions") or {}
+
+        papers, validations = await search_academic_literature(
+            material_name=material_name,
+            chemical_composition=chemical_composition,
+            instrument_type=instrument_type,
+            measurement_conditions=meas_conditions,
+            target_property=target_property,
+            analysis_result=measurement_res,
+        )
+
+        report = synthesize_literature_validation_report(
+            instrument_type=instrument_type,
+            material_name=material_name,
+            measurement_res=measurement_res,
+            papers=papers,
+            validations=validations,
+            target_property=target_property,
+            meas_conditions=meas_conditions,
+        )
+        return report
+    except Exception as e:
+        logger.exception("Literature validation failed")
+        raise HTTPException(status_code=500, detail=f"과학적 문헌 검증 오류: {str(e)}")
+
+
+@app.get("/api/projects/{project_id}/runs/{run_id}/literature-validation", response_model=LiteratureValidationReport)
+async def api_get_run_literature_validation(
+    project_id: str,
+    run_id: str,
+    instrument_type: str = Query("INTEGRATED"),
+):
+    """Retrieve full literature-grounded validation report for a project analysis run."""
+    with get_conn() as conn:
+        proj = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if not proj:
+            raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다.")
+        run_row = conn.execute("SELECT * FROM analysis_runs WHERE id = ?", (run_id,)).fetchone()
+        if not run_row:
+            raise HTTPException(status_code=404, detail="실행 기록을 찾을 수 없습니다.")
+
+    mat_name = proj["sample_name"]
+    formula = proj["expected_formula"] or ""
+    elements = json.loads(proj["expected_elements_json"] or "[]")
+    comp_str = formula or (", ".join(elements) if elements else mat_name)
+
+    xrd_res = json.loads(run_row["xrd_result_json"]) if run_row["xrd_result_json"] else {}
+    sem_res = json.loads(run_row["sem_result_json"]) if run_row["sem_result_json"] else {}
+    run_params = json.loads(run_row["params_json"]) if run_row["params_json"] else {}
+
+    inst = instrument_type.upper()
+    if inst == "XRD":
+        meas_res = xrd_res
+        meas_cond = run_params.get("xrd_params", {})
+    elif inst == "SEM":
+        meas_res = sem_res
+        meas_cond = run_params.get("sem_params", {})
+    else:
+        # INTEGRATED: combine XRD and SEM findings
+        meas_res = {"xrd": xrd_res, "sem": sem_res}
+        meas_cond = run_params
+
+    papers, validations = await search_academic_literature(
+        material_name=mat_name,
+        chemical_composition=comp_str,
+        instrument_type=inst if inst in {"XRD", "SEM"} else "XRD",
+        measurement_conditions=meas_cond,
+        target_property=f"{inst} Structural Validation",
+        analysis_result=meas_res,
+    )
+
+    # If integrated or xrd, synthesize
+    primary_inst = "XRD" if (xrd_res and inst != "SEM") else ("SEM" if sem_res else "INTEGRATED")
+    report = synthesize_literature_validation_report(
+        instrument_type=primary_inst,
+        material_name=mat_name,
+        measurement_res=xrd_res if primary_inst == "XRD" else (sem_res if primary_inst == "SEM" else meas_res),
+        papers=papers,
+        validations=validations,
+        target_property="Crystal Structure & Microstructure Validation",
+        meas_conditions=meas_cond,
+    )
+    return report
+
+
+@app.post("/api/utm/literature-validate", response_model=LiteratureValidationReport)
+async def api_utm_literature_validate(req: dict[str, Any] = Body(...)):
+    """Validate UTM tensile test results against ASTM E8 literature benchmarks."""
+    try:
+        mat_name = str(req.get("material_name") or "Al 6061-T6")
+        utm_res = req.get("utm_result") or {}
+        conditions = req.get("conditions") or {}
+
+        papers, validations = await search_academic_literature(
+            material_name=mat_name,
+            chemical_composition=req.get("chemical_composition"),
+            instrument_type="UTM",
+            measurement_conditions=conditions,
+            target_property="Tensile Mechanical Properties (E, Yield, UTS)",
+            analysis_result=utm_res,
+        )
+
+        report = synthesize_literature_validation_report(
+            instrument_type="UTM",
+            material_name=mat_name,
+            measurement_res=utm_res,
+            papers=papers,
+            validations=validations,
+            target_property="Tensile Mechanical Properties",
+            meas_conditions=conditions,
+        )
+        return report
+    except Exception as e:
+        logger.exception("UTM literature validation failed")
+        raise HTTPException(status_code=500, detail=f"UTM 문헌 검증 실패: {str(e)}")
+
+
 # Optional SPA static serving for other assets (/assets/...)
 if _DIST_DIR.exists():
     app.mount("/", StaticFiles(directory=str(_DIST_DIR), html=True), name="spa")
+
