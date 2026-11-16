@@ -265,4 +265,79 @@ export const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   }),
+
+  // Spectro & Thermal Analysis (FT-IR, DSC, TGA) Endpoints
+  getSpectroSample: (instrument: "ftir" | "dsc" | "tga") =>
+    fetch(`/api/spectro/samples/${instrument}`).then((r) => handleJson<any>(r)),
+
+  parseSpectroFile: async (instrument: "ftir" | "dsc" | "tga", file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch(`/api/spectro/${instrument}/parse`, { method: "POST", body: fd });
+    return handleJson<any>(r);
+  },
+
+  analyzeSpectro: async (instrument: "ftir" | "dsc" | "tga", payload: {
+    filename?: string;
+    columns: any[];
+    column_data: number[][];
+    conditions: Record<string, any>;
+    notes?: string;
+  }) => {
+    const r = await fetch(`/api/spectro/${instrument}/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instrument, ...payload }),
+    });
+    return handleJson<any>(r);
+  },
+
+  interpretSpectroAi: async (instrument: "ftir" | "dsc" | "tga", payload: {
+    analysis_result: any;
+    user_notes?: string;
+  }) => {
+    const r = await fetch(`/api/spectro/${instrument}/ai`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instrument, ...payload }),
+    });
+    return handleJson<any>(r);
+  },
+
+  downloadSpectroPdf: (instrument: string, payload: any, filename?: string) =>
+    downloadFile(`/api/spectro/${instrument}/download/pdf`, filename || `matlens_${instrument}_report.pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  downloadSpectroChart: (instrument: string, payload: any, filename?: string) =>
+    downloadFile(`/api/spectro/${instrument}/download/chart`, filename || `matlens_${instrument}_chart.png`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  downloadSpectroCsv: (instrument: string, payload: any, filename?: string) =>
+    downloadFile(`/api/spectro/${instrument}/download/csv`, filename || `matlens_${instrument}_processed.csv`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  downloadSpectroJson: (instrument: string, payload: any, filename?: string) =>
+    downloadFile(`/api/spectro/${instrument}/download/json`, filename || `matlens_${instrument}_analysis.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  compareSpectro: async (instrument: string, items: any[]) => {
+    const r = await fetch(`/api/spectro/${instrument}/compare`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instrument, items }),
+    });
+    return handleJson<any>(r);
+  },
 };

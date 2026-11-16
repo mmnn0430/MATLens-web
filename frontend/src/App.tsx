@@ -24,12 +24,13 @@ import { XrdView } from "./components/XrdView";
 import { SemView } from "./components/SemView";
 import { IntegratedReportView } from "./components/IntegratedReportView";
 import { UtmView } from "./components/UtmView";
+import { SpectroView } from "./components/SpectroView";
 import { Button, SourceTag } from "./components/ui/primitives";
 
 function readUrlState() {
   const sp = new URLSearchParams(window.location.search);
   return {
-    mode: (sp.get("mode") as "matlens" | "utm") || "matlens",
+    mode: (sp.get("mode") as "matlens" | "utm" | "spectro") || "matlens",
     projectId: sp.get("project"),
     runId: sp.get("run"),
     view: (sp.get("view") as "setup" | "results") || null,
@@ -38,7 +39,7 @@ function readUrlState() {
 }
 
 function writeUrlState(next: {
-  mode?: "matlens" | "utm";
+  mode?: "matlens" | "utm" | "spectro";
   projectId?: string | null;
   runId?: string | null;
   view?: "setup" | "results";
@@ -55,7 +56,7 @@ function writeUrlState(next: {
 }
 
 export default function App() {
-  const [serviceMode, setServiceMode] = useState<"matlens" | "utm">("matlens");
+  const [serviceMode, setServiceMode] = useState<"matlens" | "utm" | "spectro">("matlens");
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null);
@@ -171,6 +172,8 @@ export default function App() {
 
     if (urlState.mode === "utm") {
       setServiceMode("utm");
+    } else if (urlState.mode === "spectro") {
+      setServiceMode("spectro");
     } else if (urlState.projectId) {
       if (urlState.tab) setActiveTab(urlState.tab);
       openProject(urlState.projectId, urlState.runId, urlState.view || undefined, true);
@@ -537,6 +540,21 @@ export default function App() {
                 <span>UTM 데이터 분석</span>
                 <span className="w-1.5 h-1.5 rounded-full bg-[#3182F6]" />
               </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setServiceMode("spectro");
+                  writeUrlState({ mode: "spectro" });
+                }}
+                className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-[8px] text-[12px] sm:text-[13px] font-semibold transition-all flex items-center gap-1.5 ${
+                  serviceMode === "spectro"
+                    ? "bg-white text-[#4F46E5] shadow-sm font-bold"
+                    : "text-[#6B7684] hover:text-[#191F28]"
+                }`}
+              >
+                <span>분광·열분석 (FT-IR·DSC·TGA)</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-[#4F46E5]" />
+              </button>
             </div>
 
             {serviceMode === "matlens" && activeProject && (
@@ -738,6 +756,8 @@ export default function App() {
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-8 py-6 sm:py-8">
         {serviceMode === "utm" ? (
           <UtmView />
+        ) : serviceMode === "spectro" ? (
+          <SpectroView />
         ) : viewMode === "setup" || !activeProject ? (
           <LandingSetup
             health={health}

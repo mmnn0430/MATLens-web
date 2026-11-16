@@ -1740,6 +1740,11 @@ def get_run_ai_summary(run_id: str, request: Request, format: str = Query("markd
     return PlainTextResponse(content=_build_ai_markdown_summary(ctx, base_url))
 
 
+# Spectro & Thermal Analysis (FT-IR, DSC, TGA) Endpoints
+from app.spectro.router import router as spectro_router
+app.include_router(spectro_router)
+
+
 # Optional SPA static serving for other assets (/assets/...)
 if _DIST_DIR.exists():
     app.mount("/", StaticFiles(directory=str(_DIST_DIR), html=True), name="spa")
