@@ -1,19 +1,14 @@
-import React, { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   Activity,
   AlertCircle,
-  AlertTriangle,
-  ArrowRight,
   BarChart3,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   Download,
   FileSpreadsheet,
-  FileText,
   FlaskConical,
-  HelpCircle,
-  Info,
   Layers,
   Play,
   RefreshCw,
@@ -49,9 +44,6 @@ export function SpectroView({ initialInstrument = "ftir" }: SpectroViewProps) {
   // Formula drawer state
   const [showFormulaDrawer, setShowFormulaDrawer] = useState(false);
 
-  // Active view tab: "analysis" vs "compare"
-  const [activeSubView, setActiveSubView] = useState<"analysis" | "compare">("analysis");
-
   // Comparison store
   const [compareItems, setCompareItems] = useState<any[]>([]);
   const [compareTable, setCompareTable] = useState<any[]>([]);
@@ -81,7 +73,7 @@ export function SpectroView({ initialInstrument = "ftir" }: SpectroViewProps) {
   const [tgaInputIsPercent, setTgaInputIsPercent] = useState<boolean>(true);
 
   // User notes
-  const [userNotes, setUserNotes] = useState<string>("");
+  const [userNotes] = useState<string>("");
 
   // ─────────────────────────────────────────────────────────────────────────
   // Handlers
@@ -881,7 +873,7 @@ export function SpectroView({ initialInstrument = "ftir" }: SpectroViewProps) {
                     >
                       {analysisResult.segments.map((seg: any) => (
                         <option key={seg.id} value={seg.id}>
-                          {seg.name} ({seg.t_start_c.toFixed(0)}°C → {seg.t_end_c.toFixed(0)}°C)
+                          {seg.name} ({(seg.start_temp ?? seg.t_start_c ?? 0).toFixed?.(0) ?? seg.start_temp}°C → {(seg.end_temp ?? seg.t_end_c ?? 0).toFixed?.(0) ?? seg.end_temp}°C)
                         </option>
                       ))}
                     </select>
