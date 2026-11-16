@@ -1,8 +1,8 @@
 import { DownloadLink } from "./DownloadLink";
-import React, { useMemo, useState } from "react";
-import { RefreshCw, Eye, EyeOff, ChevronRight, Info, Download, Sparkles } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { RefreshCw, Eye, EyeOff, ChevronRight, Info, Download, Sparkles, BookOpen } from "lucide-react";
 import { api } from "../api";
-import type { XRDParams } from "../types";
+import type { LiteratureValidationReport, XRDParams } from "../types";
 import { PlotlyChart } from "./PlotlyChart";
 import { PeriodicTablePicker } from "./PeriodicTablePicker";
 import {
@@ -14,6 +14,9 @@ import {
   StatusBadge,
   SwitchControl,
 } from "./ui/primitives";
+import { LiteratureValidationPanel } from "./LiteratureValidationPanel";
+import { ComparisonVisualization } from "./ComparisonVisualization";
+import { ScientificInterpretationPanel } from "./ScientificInterpretationPanel";
 
 interface XrdViewProps {
   runId: string;
@@ -41,6 +44,9 @@ export function XrdView({
   const [showSmoothedDetect, setShowSmoothedDetect] = useState<boolean>(false);
   const [expandedPeakId, setExpandedPeakId] = useState<string | null>(null);
 
+  const [xrdLitReport, setXrdLitReport] = useState<LiteratureValidationReport | null>(null);
+  const [loadingXrdLit, setLoadingXrdLit] = useState<boolean>(false);
+
   if (!xrdResult) {
     return (
       <Card className="py-16 text-center space-y-2">
@@ -55,6 +61,27 @@ export function XrdView({
   const candidates = xrdResult.phase_matching?.candidates || [];
   const activeCand = candidates[selectedCandIdx] || candidates[0] || null;
   const scherrer = xrdResult.scherrer || {};
+
+  const fetchXrdLiterature = useCallback(async () => {
+    if (!xrdResult) return;
+    setLoadingXrdLit(true);
+    try {
+      const mat = activeCand?.formula || activeCand?.name || (expectedElements.length ? expectedElements.join("-") : "XRD Sample");
+      const rep = await api.validateLiterature("XRD", mat, {
+        measurement_res: xrdResult,
+        measurement_conditions: xrdParams,
+      }, activeCand?.formula, "Lattice Parameter, Peak Shifting, Phase Identification");
+      setXrdLitReport(rep);
+    } catch (err) {
+      console.error("XRD literature fetch error:", err);
+    } finally {
+      setLoadingXrdLit(false);
+    }
+  }, [xrdResult, xrdParams, activeCand, expectedElements]);
+
+  useEffect(() => {
+    fetchXrdLiterature();
+  }, [runId]);
   const wh = xrdResult.williamson_hall || {};
   const cryst = xrdResult.crystallinity || {};
   const peaks: any[] = xrdResult.peaks || [];
@@ -1111,6 +1138,51 @@ export function XrdView({
           </table>
         </div>
       </Card>
+
+      {/* XRD Literature Validation Section */}
+      <CollapsiblePanel
+        title="XRD 학술 문헌 검증 및 격자상수 대조 (Literature Grounding)"
+        subtitle="측정된 회절 피크 위치(2θ), Bragg d-spacing, 격자상수를 OpenAlex 및 피어리뷰 공인 문헌과 대조합니다."
+      >
+        <div className="space-y-5 pt-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] text-[#6B7684]">
+              비교 대상 결정상: <strong className="text-[#191F28]">{activeCand?.name || "XRD Phase"}</strong> ({activeCand?.formula || ""})
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={loadingXrdLit}
+              onClick={fetchXrdLiterature}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 mr-1 ${loadingXrdLit ? "animate-spin" : ""}`} />
+              문헌 재검색
+            </Button>
+          </div>
+
+          {xrdLitReport ? (
+            <div className="space-y-5">
+              <LiteratureValidationPanel
+                papers={xrdLitReport.papers}
+                validations={xrdLitReport.validations}
+                materialName={xrdLitReport.material_name}
+                instrumentType="XRD"
+                isLoading={loadingXrdLit}
+              />
+
+              <ComparisonVisualization comparisons={xrdLitReport.comparisons} />
+
+              <ScientificInterpretationPanel report={xrdLitReport} />
+            </div>
+          ) : loadingXrdLit ? (
+            <Card className="p-6 text-center bg-white border border-[#E5E8EB] rounded-[16px]">
+              <BookOpen className="w-5 h-5 text-[#3182F6] animate-pulse mx-auto mb-2" />
+              <p className="text-[13px] text-[#4E5968]">XRD 결정구조 학술 문헌을 검색·대조 중입니다...</p>
+            </Card>
+          ) : null}
+        </div>
+      </CollapsiblePanel>
     </div>
   );
 }

@@ -26,7 +26,7 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
-from app.engine.pdf_export import _register_korean_font
+from ..engine.pdf_export import _register_korean_font
 
 
 def generate_utm_charts_image(analysis_result: Dict[str, Any], title: str = "UTM Tensile Test Analysis") -> bytes:

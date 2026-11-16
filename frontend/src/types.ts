@@ -287,3 +287,119 @@ export interface UTMAnalysisResult {
   curves: UTMCurves;
 }
 
+
+// ---------------- Literature-Grounded Scientific Validation Types ---------------- //
+
+export type AccessLevel = "full_text" | "abstract_only" | "metadata_only";
+export type ReliabilityStatus =
+  | "Supported"
+  | "Partially Supported"
+  | "Insufficient Evidence"
+  | "Conflicting Evidence"
+  | "Not Comparable";
+export type ConditionStatus = "compatible" | "conditionally_compatible" | "incompatible";
+
+export interface LiteraturePaper {
+  paper_id: string;
+  title: string;
+  authors: string[];
+  publication_year: number | null;
+  journal: string | null;
+  doi: string | null;
+  landing_page_url: string | null;
+  pdf_url: string | null;
+  access_level: AccessLevel;
+  citation_count: number | null;
+  open_access_status: string;
+  abstract: string | null;
+}
+
+export interface EvidenceDetail {
+  property: string;
+  value: number | null;
+  unit: string;
+  measurement_temperature: number | null;
+  source_page: number | string | null;
+  source_figure: string | null;
+  source_table: string | null;
+  quoted_text: string;
+  extraction_method: string;
+  verification_status: "verified" | "pending" | "unverified";
+}
+
+export interface ExtractedEvidenceItem {
+  paper: {
+    title: string;
+    doi: string;
+    publication_year: number | null;
+    access_level: string;
+  };
+  evidence: EvidenceDetail;
+}
+
+export interface ConditionCompatibility {
+  material_similarity: number;
+  crystal_or_micro_similarity: number;
+  experimental_method_similarity: number;
+  condition_compatibility: ConditionStatus;
+  condition_mismatches: string[];
+  direct_comparison_allowed: boolean;
+  direct_comparison_warning: string | null;
+}
+
+export interface ComparisonMetricItem {
+  property_name: string;
+  measured_value: number | null;
+  literature_value: number | null;
+  unit: string;
+  absolute_deviation: number | null;
+  relative_deviation_pct: number | null;
+  comparable: boolean;
+  reason_if_not_comparable: string | null;
+}
+
+export interface AnalyticalReliability {
+  status: ReliabilityStatus;
+  calibration_availability: boolean;
+  data_quality_label: string;
+  fitting_residual_label: string;
+  measurement_uncertainty: string;
+  details: string[];
+}
+
+export interface InterpretationReliability {
+  status: ReliabilityStatus;
+  evidence_traceability: string;
+  condition_compatibility_label: string;
+  literature_agreement: string;
+  unverified_assumptions: string[];
+  details: string[];
+}
+
+export interface ScientificReliabilityAssessment {
+  analytical: AnalyticalReliability;
+  interpretation: InterpretationReliability;
+}
+
+export interface LiteratureValidationItem {
+  paper: LiteraturePaper;
+  compatibility: ConditionCompatibility;
+  evidence_items: ExtractedEvidenceItem[];
+  relevance_score: number;
+  comparison_status: ReliabilityStatus;
+}
+
+export interface LiteratureValidationReport {
+  instrument_type: "XRD" | "SEM" | "UTM" | "INTEGRATED";
+  material_name: string;
+  target_property: string;
+  papers: LiteraturePaper[];
+  validations: LiteratureValidationItem[];
+  comparisons: ComparisonMetricItem[];
+  reliability: ScientificReliabilityAssessment;
+  findings_verified: string[];
+  findings_literature: string[];
+  hypotheses_and_limitations: string[];
+  recommended_experiments: string[];
+  disclaimers: string[];
+}

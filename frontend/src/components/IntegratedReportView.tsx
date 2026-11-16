@@ -12,9 +12,10 @@ import {
   FileJson,
   Image as ImageIcon,
   KeyRound,
+  BookOpen,
 } from "lucide-react";
 import { api } from "../api";
-import type { GeminiModelOption, ProjectDetail, RunDetail } from "../types";
+import type { GeminiModelOption, LiteratureValidationReport, ProjectDetail, RunDetail } from "../types";
 import {
   Button,
   Card,
@@ -22,6 +23,9 @@ import {
   MetricCard,
   SourceTag,
 } from "./ui/primitives";
+import { LiteratureValidationPanel } from "./LiteratureValidationPanel";
+import { ComparisonVisualization } from "./ComparisonVisualization";
+import { ScientificInterpretationPanel } from "./ScientificInterpretationPanel";
 
 interface IntegratedReportViewProps {
   project: ProjectDetail;
@@ -118,6 +122,30 @@ export function IntegratedReportView({
   const [mpKeyInput, setMpKeyInput] = useState<string>("");
   const [savingKey, setSavingKey] = useState<boolean>(false);
   const [autoRetriedRunId, setAutoRetriedRunId] = useState<string | null>(null);
+
+  const [litReport, setLitReport] = useState<LiteratureValidationReport | null>(null);
+  const [isLoadingLit, setIsLoadingLit] = useState<boolean>(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    setIsLoadingLit(true);
+    api
+      .getRunLiteratureValidation(project.id, run.id, "INTEGRATED")
+      .then((rep) => {
+        if (isMounted) {
+          setLitReport(rep);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load literature validation report:", err);
+      })
+      .finally(() => {
+        if (isMounted) setIsLoadingLit(false);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [project.id, run.id]);
 
   useEffect(() => {
     api
@@ -764,6 +792,63 @@ export function IntegratedReportView({
           </div>
         )}
       </Card>
+
+      {/* Scientific Literature Grounding & Validation Section */}
+      <div className="space-y-5 pt-6 border-t border-[#E5E8EB]">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-[#EFF6FF] to-[#F8FAFC] p-5 rounded-[16px] border border-[#BFDBFE]">
+          <div>
+            <div className="flex items-center gap-2">
+              <BookOpen className="w-5 h-5 text-[#2563EB]" />
+              <h3 className="text-[17px] font-bold text-[#1E3A8A]">
+                과학적 문헌 검증 및 학술 근거 (Literature-Grounded Scientific Validation)
+              </h3>
+            </div>
+            <p className="text-[13px] text-[#475569] mt-1">
+              측정 데이터의 분석 결과를 공인 학술 문헌(OpenAlex / 피어리뷰 데이터베이스)과 대조하여 과학적 타당성과 근거 수준을 평가합니다.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="md"
+            className="border-[#93C5FD] text-[#1D4ED8] bg-white hover:bg-[#DBEAFE] shrink-0"
+            disabled={isLoadingLit}
+            onClick={() => {
+              setIsLoadingLit(true);
+              api.getRunLiteratureValidation(project.id, run.id, "INTEGRATED")
+                .then(setLitReport)
+                .catch((err) => console.error("Error refreshing literature:", err))
+                .finally(() => setIsLoadingLit(false));
+            }}
+          >
+            <RefreshCw className={`w-4 h-4 mr-1.5 ${isLoadingLit ? "animate-spin" : ""}`} />
+            문헌 재검색·대조
+          </Button>
+        </div>
+
+        {litReport ? (
+          <div className="space-y-6">
+            <LiteratureValidationPanel
+              papers={litReport.papers}
+              validations={litReport.validations}
+              materialName={litReport.material_name}
+              instrumentType={litReport.instrument_type}
+              isLoading={isLoadingLit}
+            />
+
+            <ComparisonVisualization comparisons={litReport.comparisons} />
+
+            <ScientificInterpretationPanel report={litReport} />
+          </div>
+        ) : isLoadingLit ? (
+          <Card className="p-8 text-center bg-white border border-[#E5E8EB] rounded-[16px]">
+            <BookOpen className="w-6 h-6 text-[#3182F6] animate-pulse mx-auto mb-2" />
+            <p className="text-[14px] font-medium text-[#4E5968]">
+              시료 "{project.sample_name}"에 부합하는 학술 논문 및 공인 분석 기준을 검색 중입니다...
+            </p>
+          </Card>
+        ) : null}
+      </div>
 
       {/* Reproducibility & Run History Switcher */}
       <CollapsiblePanel

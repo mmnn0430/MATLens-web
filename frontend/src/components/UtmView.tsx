@@ -10,13 +10,19 @@ import {
   Play,
   Activity,
   ArrowRight,
+  BookOpen,
+  RefreshCw,
 } from "lucide-react";
 import { api } from "../api";
 import type {
+  LiteratureValidationReport,
   UTMAnalysisResult,
   UTMParsedData,
 } from "../types";
 import { Button, Card } from "./ui/primitives";
+import { LiteratureValidationPanel } from "./LiteratureValidationPanel";
+import { ComparisonVisualization } from "./ComparisonVisualization";
+import { ScientificInterpretationPanel } from "./ScientificInterpretationPanel";
 
 export function UtmView() {
   const [, setFile] = useState<File | null>(null);
@@ -44,10 +50,39 @@ export function UtmView() {
   const [elasticEndPct, setElasticEndPct] = useState<string>("0.30");
   const [calcOffsetYield, setCalcOffsetYield] = useState(true);
 
+  // Literature Grounding & Validation
+  const [materialName, setMaterialName] = useState<string>("Al 6061-T6");
+  const [heatTreatment, setHeatTreatment] = useState<string>("T6");
+  const [utmValidationReport, setUtmValidationReport] = useState<LiteratureValidationReport | null>(null);
+  const [isValidatingLit, setIsValidatingLit] = useState<boolean>(false);
+
   // Active chart tab
   const [chartTab, setChartTab] = useState<"stress_strain" | "load_disp" | "time_load">("stress_strain");
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  const validateLiteratureForUtm = useCallback(
+    async (res: UTMAnalysisResult, mat: string, ht: string) => {
+      setIsValidatingLit(true);
+      try {
+        const rep = await api.validateUtmLiterature({
+          material_name: mat,
+          utm_result: res,
+          conditions: {
+            heat_treatment: ht,
+            test_temperature_K: 296.0,
+            strain_rate_per_sec: 0.001,
+          },
+        });
+        setUtmValidationReport(rep);
+      } catch (err) {
+        console.error("UTM literature validation error:", err);
+      } finally {
+        setIsValidatingLit(false);
+      }
+    },
+    []
+  );
 
   // Handle file drop / select
   const handleFileChange = async (selectedFile: File) => {
@@ -76,9 +111,24 @@ export function UtmView() {
         analysis_name: selectedFile.name,
         calc_offset_yield: calcOffsetYield,
       };
+      // Infer material name from filename if possible
+      let inferredMat = "Al 6061-T6";
+      let inferredHt = "T6";
+      const fnLower = selectedFile.name.toLowerCase();
+      if (fnLower.includes("steel") || fnLower.includes("ss400") || fnLower.includes("304")) {
+        inferredMat = "AISI 304 Stainless Steel";
+        inferredHt = "Solution Annealed";
+      } else if (fnLower.includes("al") || fnLower.includes("aluminum") || fnLower.includes("6061")) {
+        inferredMat = "Al 6061-T6";
+        inferredHt = "T6";
+      }
+      setMaterialName(inferredMat);
+      setHeatTreatment(inferredHt);
+
       const res = await api.analyzeUtm(request);
       setAnalyzedRequest(request);
       setAnalysisResult(res);
+      validateLiteratureForUtm(res, inferredMat, inferredHt);
     } catch (err: any) {
       setErrorMsg(err?.message || "파일 파싱에 실패했습니다.");
     } finally {
@@ -109,9 +159,11 @@ export function UtmView() {
         analysis_name: analysisName,
         notes: notes,
       };
+
       const res = await api.analyzeUtm(request);
       setAnalyzedRequest(request);
       setAnalysisResult(res);
+      validateLiteratureForUtm(res, materialName, heatTreatment);
     } catch (err: any) {
       setErrorMsg(err?.message || "분석 계산에 실패했습니다.");
     } finally {
@@ -129,6 +181,9 @@ export function UtmView() {
     calcOffsetYield,
     analysisName,
     notes,
+    materialName,
+    heatTreatment,
+    validateLiteratureForUtm,
   ]);
 
   // Export the parameters that produced the visible result, including dimensions
@@ -882,6 +937,81 @@ export function UtmView() {
                     <span>UTM 리포트 PDF</span>
                   </Button>
                 </div>
+              </div>
+            )}
+
+            {/* Scientific Literature Grounding for UTM */}
+            {analysisResult && (
+              <div className="space-y-4 pt-4 border-t border-[#E5E8EB]">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-[#EFF6FF] to-[#F8FAFC] p-4 sm:p-5 rounded-[16px] border border-[#BFDBFE]">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <BookOpen className="w-5 h-5 text-[#2563EB]" />
+                      <h3 className="text-[16px] font-bold text-[#1E3A8A]">
+                        기계적 물성 학술 문헌 검증 (ASTM E8 Literature Validation)
+                      </h3>
+                    </div>
+                    <p className="text-[12px] text-[#475569] mt-0.5">
+                      측정된 탄성계수(E), 0.2% Offset 항복강도, 인장강도(UTS)를 피어리뷰 문헌 및 ASTM E8 규격과 대조합니다.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-[8px] border border-[#BFDBFE] text-[12px]">
+                      <span className="text-[#64748B] font-medium">재료:</span>
+                      <input
+                        type="text"
+                        value={materialName}
+                        onChange={(e) => setMaterialName(e.target.value)}
+                        className="w-28 font-semibold text-[#1E293B] outline-none bg-transparent"
+                        placeholder="예: Al 6061-T6"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-[8px] border border-[#BFDBFE] text-[12px]">
+                      <span className="text-[#64748B] font-medium">열처리:</span>
+                      <input
+                        type="text"
+                        value={heatTreatment}
+                        onChange={(e) => setHeatTreatment(e.target.value)}
+                        className="w-20 font-semibold text-[#1E293B] outline-none bg-transparent"
+                        placeholder="예: T6"
+                      />
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-[#93C5FD] text-[#1D4ED8] bg-white hover:bg-[#DBEAFE]"
+                      disabled={isValidatingLit}
+                      onClick={() => validateLiteratureForUtm(analysisResult, materialName, heatTreatment)}
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 mr-1 ${isValidatingLit ? "animate-spin" : ""}`} />
+                      <span>문헌 대조</span>
+                    </Button>
+                  </div>
+                </div>
+
+                {utmValidationReport ? (
+                  <div className="space-y-5">
+                    <LiteratureValidationPanel
+                      papers={utmValidationReport.papers}
+                      validations={utmValidationReport.validations}
+                      materialName={utmValidationReport.material_name}
+                      instrumentType={utmValidationReport.instrument_type}
+                      isLoading={isValidatingLit}
+                    />
+
+                    <ComparisonVisualization comparisons={utmValidationReport.comparisons} />
+
+                    <ScientificInterpretationPanel report={utmValidationReport} />
+                  </div>
+                ) : isValidatingLit ? (
+                  <Card className="p-6 text-center bg-white border border-[#E5E8EB] rounded-[16px]">
+                    <BookOpen className="w-5 h-5 text-[#3182F6] animate-pulse mx-auto mb-2" />
+                    <p className="text-[13px] font-medium text-[#4E5968]">
+                      ASTM E8 인장 물성 문헌 데이터 대조 중...
+                    </p>
+                  </Card>
+                ) : null}
               </div>
             )}
           </div>
