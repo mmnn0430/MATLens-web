@@ -1728,6 +1728,73 @@ def utm_download_pdf(req: UTMAnalyzeRequest):
         raise HTTPException(status_code=400, detail=f"PDF 리포트 생성 실패: {str(e)}")
 
 
+# ==========================================
+# Direct XRD / SEM File Analysis Endpoints
+# ==========================================
+@app.post("/api/xrd/analyze-file")
+async def xrd_analyze_file(
+    file: UploadFile = File(...),
+    two_theta_min: Optional[float] = None,
+    two_theta_max: Optional[float] = None,
+    sample_name: Optional[str] = None,
+):
+    """Directly analyze an XRD file (CSV, TXT, XY, DAT, XLSX) and return peaks & phase matching."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="빈 파일입니다.")
+    from .engine.ref_library import REFERENCE_LIBRARY
+    from .engine.xrd_engine import run_xrd_pipeline
+    params = XRDParams()
+    if two_theta_min is not None:
+        params.two_theta_min = two_theta_min
+    if two_theta_max is not None:
+        params.two_theta_max = two_theta_max
+
+    try:
+        res = run_xrd_pipeline(
+            raw=raw,
+            params=params,
+            ref_entries=list(REFERENCE_LIBRARY),
+            expected_elements=[],
+            sample_name=sample_name or file.filename or "XRD Sample",
+        )
+        return res
+    except Exception as e:
+        logger.exception("XRD direct analysis failed")
+        raise HTTPException(status_code=400, detail=f"XRD 분석 실패: {str(e)}")
+
+
+@app.post("/api/sem/analyze-file")
+async def sem_analyze_file(
+    file: UploadFile = File(...),
+    scale_length_px: Optional[float] = None,
+    scale_real_value: Optional[float] = None,
+    scale_unit: str = "nm",
+    sample_name: Optional[str] = None,
+):
+    """Directly analyze an SEM image (PNG, TIF, JPG) and return particles, stats, and overlays."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="빈 이미지 파일입니다.")
+    import base64
+    from .engine.sem_engine import run_sem_pipeline
+    params = SEMParams(mode="particle")
+    if scale_length_px and scale_real_value:
+        params.scale_confirmed = True
+        params.scale_length_px = scale_length_px
+        params.scale_real_value = scale_real_value
+        params.scale_unit = scale_unit
+
+    try:
+        res, ov_png, roi_png = run_sem_pipeline(raw=raw, params=params)
+        res["overlay_data_url"] = f"data:image/png;base64,{base64.b64encode(ov_png).decode('ascii')}" if ov_png else None
+        res["roi_data_url"] = f"data:image/png;base64,{base64.b64encode(roi_png).decode('ascii')}" if roi_png else None
+        return res
+    except Exception as e:
+        logger.exception("SEM direct analysis failed")
+        raise HTTPException(status_code=400, detail=f"SEM 분석 실패: {str(e)}")
+
+
 @app.get("/api/runs/{run_id}/summary")
 def get_run_ai_summary(run_id: str, request: Request, format: str = Query("markdown")):
     """Dedicated endpoint returning concise Markdown or JSON summary optimized for LLM reading."""
