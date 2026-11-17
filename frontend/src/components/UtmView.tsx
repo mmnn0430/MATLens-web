@@ -10,6 +10,7 @@ import {
   Play,
   Activity,
   ArrowRight,
+  Layers,
 } from "lucide-react";
 import { api } from "../api";
 import type {
@@ -17,8 +18,14 @@ import type {
   UTMParsedData,
 } from "../types";
 import { Button, Card } from "./ui/primitives";
+import { UniversalBatchUploader } from "./batch/UniversalBatchUploader";
+import { UtmBatchComparisonView } from "./batch/UtmBatchComparisonView";
+import type { UniversalDataset, UtmBatchAnalysisResult } from "../core/batch/types";
+import { utmAdapter } from "../core/batch/adapters/utmAdapter";
 
 export function UtmView() {
+  const [workflowMode, setWorkflowMode] = useState<"single" | "batch">("single");
+  const [batchDatasets, setBatchDatasets] = useState<UniversalDataset<any, UtmBatchAnalysisResult>[]>([]);
   const [, setFile] = useState<File | null>(null);
   const [parsedData, setParsedData] = useState<UTMParsedData | null>(null);
   const [analysisResult, setAnalysisResult] = useState<UTMAnalysisResult | null>(null);
@@ -372,7 +379,60 @@ export function UtmView() {
         </div>
       </div>
 
-      {/* Error Banner */}
+      {/* Workflow Mode Tabs */}
+      <div className="flex items-center gap-2 border-b border-[#E5E8EB] pb-2">
+        <button
+          type="button"
+          onClick={() => setWorkflowMode("single")}
+          className={`flex items-center gap-2 px-4 py-2 rounded-[10px] text-[14px] font-bold transition-all ${
+            workflowMode === "single"
+              ? "bg-[#3182F6] text-white shadow-sm"
+              : "text-[#6B7684] hover:bg-[#F2F4F6] hover:text-[#191F28]"
+          }`}
+        >
+          <Activity className="w-4 h-4" />
+          단일 시편 정밀 분석
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setWorkflowMode("batch");
+            if (batchDatasets.length === 0 && utmAdapter.createSampleDatasets) {
+              utmAdapter.createSampleDatasets().then(setBatchDatasets);
+            }
+          }}
+          className={`flex items-center gap-2 px-4 py-2 rounded-[10px] text-[14px] font-bold transition-all ${
+            workflowMode === "batch"
+              ? "bg-[#3182F6] text-white shadow-sm"
+              : "text-[#6B7684] hover:bg-[#F2F4F6] hover:text-[#191F28]"
+          }`}
+        >
+          <Layers className="w-4 h-4" />
+          복수 시편 중첩 비교 (Universal Batch)
+          <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-[#10B981] text-white font-semibold">신규</span>
+        </button>
+      </div>
+
+      {workflowMode === "batch" ? (
+        <div className="space-y-6">
+          <UniversalBatchUploader
+            instrumentType="UTM"
+            datasets={batchDatasets}
+            onDatasetsChange={setBatchDatasets}
+          />
+          <UtmBatchComparisonView
+            datasets={batchDatasets}
+            onToggleVisible={(id) => {
+              setBatchDatasets((prev) =>
+                prev.map((d) => (d.id === id ? { ...d, visible: !d.visible } : d))
+              );
+            }}
+          />
+        </div>
+      ) : (
+        <>
+          {/* Error Banner */}
       {errorMsg && (
         <div className="rounded-[16px] bg-[#FEE2E2] border border-[#FECACA] p-4 text-[13px] text-[#DC2626] flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -886,6 +946,8 @@ export function UtmView() {
             )}
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

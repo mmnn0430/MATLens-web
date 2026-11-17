@@ -265,4 +265,36 @@ export const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   }),
+
+  // Batch Direct Analysis APIs (XRD & SEM)
+  analyzeXrdFile: async (file: File, options?: { two_theta_min?: number; two_theta_max?: number; sample_name?: string }) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const query = new URLSearchParams();
+    if (options?.two_theta_min != null) query.set("two_theta_min", String(options.two_theta_min));
+    if (options?.two_theta_max != null) query.set("two_theta_max", String(options.two_theta_max));
+    if (options?.sample_name) query.set("sample_name", options.sample_name);
+    const qs = query.toString();
+    const r = await fetch(`/api/xrd/analyze-file${qs ? `?${qs}` : ""}`, {
+      method: "POST",
+      body: fd,
+    });
+    return handleJson<any>(r);
+  },
+
+  analyzeSemFile: async (file: File, options?: { scale_length_px?: number; scale_real_value?: number; scale_unit?: string; sample_name?: string }) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const query = new URLSearchParams();
+    if (options?.scale_length_px != null) query.set("scale_length_px", String(options.scale_length_px));
+    if (options?.scale_real_value != null) query.set("scale_real_value", String(options.scale_real_value));
+    if (options?.scale_unit) query.set("scale_unit", options.scale_unit);
+    if (options?.sample_name) query.set("sample_name", options.sample_name);
+    const qs = query.toString();
+    const r = await fetch(`/api/sem/analyze-file${qs ? `?${qs}` : ""}`, {
+      method: "POST",
+      body: fd,
+    });
+    return handleJson<any>(r);
+  },
 };
