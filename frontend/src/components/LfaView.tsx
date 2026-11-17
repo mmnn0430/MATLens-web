@@ -4,8 +4,10 @@ import {
   AlertCircle,
   AlertTriangle,
   BookOpen,
+  CheckCircle2,
   Flame,
   Info,
+  Share2,
   Sparkles,
   Upload,
 } from "lucide-react";
@@ -13,7 +15,11 @@ import { api } from "../api";
 import { PlotlyChart } from "./PlotlyChart";
 import type { GroundingData, LfaAnalysisResult, ScientificInterpretation } from "../types";
 
-export function LfaView() {
+interface LfaViewProps {
+  onNavigateToIntegrated?: () => void;
+}
+
+export function LfaView({ onNavigateToIntegrated }: LfaViewProps = {}) {
   const [rawText, setRawText] = useState<string>("");
   const [thicknessMm, setThicknessMm] = useState<number>(2.5);
   const [densityGCm3, setDensityGCm3] = useState<number | "">(2.6);
@@ -87,6 +93,27 @@ export function LfaView() {
       setResult(resp.calculated_properties);
       setGrounding(resp.grounding);
       setAiReport(resp.ai_interpretation);
+
+      // Save to shared measurement storage for continuous cross-instrument integration
+      try {
+        localStorage.setItem(
+          "matlens_shared_lfa_data",
+          JSON.stringify({
+            sample_id: sampleId,
+            material_name: materialName,
+            temperature_C: tempC,
+            thermal_diffusivity_mm2_s: resp.calculated_properties.thermal_diffusivity_mm2_s,
+            thermal_conductivity_W_mK: resp.calculated_properties.thermal_conductivity_W_mK,
+            density_g_cm3: densityGCm3 || 2.6,
+            specific_heat_J_gK: specificHeatJGK || 0.82,
+            is_literature_density: isLitDensity,
+            is_literature_cp: isLitCp,
+            timestamp: new Date().toISOString(),
+          })
+        );
+      } catch (e) {
+        console.warn("Failed to persist LFA data to localStorage:", e);
+      }
     } catch (err: any) {
       setErrorMsg(err.message || "LFA 분석 실행에 실패했습니다.");
     } finally {
@@ -378,6 +405,26 @@ export function LfaView() {
                   <span className="text-[11px] font-semibold text-[#64748B] block">최대 온도 상승 (ΔT)</span>
                   <span className="text-[14px] font-bold text-[#1E293B]">{result.max_temp_rise_C.toFixed(2)} °C</span>
                 </div>
+              </div>
+
+              {/* Continuous Integration Flow Banner */}
+              <div className="p-3.5 rounded-[12px] bg-[#FFFBEB] border border-[#FDE68A] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-[#D97706] shrink-0" />
+                  <span className="text-[12px] text-[#92400E] font-medium">
+                    LFA 열물성 데이터가 <strong>'통합 리포트'</strong>에 자동 연계되었습니다. (열확산도: {result.thermal_diffusivity_mm2_s.toFixed(3)} mm²/s)
+                  </span>
+                </div>
+                {onNavigateToIntegrated && (
+                  <button
+                    type="button"
+                    onClick={onNavigateToIntegrated}
+                    className="px-3 py-1 rounded-[8px] bg-[#D97706] hover:bg-[#B45309] text-white text-[11px] font-bold transition flex items-center gap-1 shrink-0 cursor-pointer shadow-sm"
+                  >
+                    <Share2 className="w-3 h-3" />
+                    통합 리포트에서 교차 분석 →
+                  </button>
+                )}
               </div>
             </div>
           )}

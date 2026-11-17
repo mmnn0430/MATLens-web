@@ -2,7 +2,9 @@ import { useState } from "react";
 import {
   Activity,
   BookOpen,
+  CheckCircle2,
   Info,
+  Share2,
   Sparkles,
   Upload,
   Zap,
@@ -11,7 +13,11 @@ import { api } from "../api";
 import { PlotlyChart } from "./PlotlyChart";
 import type { GroundingData, HallAnalysisResult, ScientificInterpretation } from "../types";
 
-export function HallView() {
+interface HallViewProps {
+  onNavigateToIntegrated?: () => void;
+}
+
+export function HallView({ onNavigateToIntegrated }: HallViewProps = {}) {
   const [rawText, setRawText] = useState<string>("");
   const [thicknessUm, setThicknessUm] = useState<number>(500);
   const [currentMa, setCurrentMa] = useState<number>(10);
@@ -101,6 +107,27 @@ MagneticField_T,TransverseVoltage_mV
       setResult(resp.calculated_properties);
       setGrounding(resp.grounding);
       setAiReport(resp.ai_interpretation);
+
+      // Save to shared measurement storage for continuous cross-instrument integration
+      try {
+        localStorage.setItem(
+          "matlens_shared_hall_data",
+          JSON.stringify({
+            sample_id: sampleId,
+            material_name: materialName,
+            dopant: dopant,
+            temperature_C: tempC,
+            carrier_concentration_cm3: resp.calculated_properties.carrier_concentration_cm3,
+            hall_mobility_cm2_Vs: resp.calculated_properties.hall_mobility_cm2_Vs,
+            electrical_conductivity_S_cm: resp.calculated_properties.electrical_conductivity_S_cm,
+            carrier_type: resp.calculated_properties.carrier_type,
+            resistivity_Ohm_cm: resp.calculated_properties.resistivity_Ohm_cm,
+            timestamp: new Date().toISOString(),
+          })
+        );
+      } catch (e) {
+        console.warn("Failed to persist Hall data to localStorage:", e);
+      }
     } catch (err: any) {
       setErrorMsg(err.message || "Hall 분석 실행에 실패했습니다.");
     } finally {
@@ -372,6 +399,28 @@ MagneticField_T,TransverseVoltage_mV
                   {result.electrical_conductivity_S_cm ? `${result.electrical_conductivity_S_cm.toFixed(2)} S/cm` : "저항값 필요"}
                 </span>
               </div>
+            </div>
+          )}
+
+          {/* Continuous Integration Flow Banner */}
+          {result && (
+            <div className="mt-4 p-3.5 rounded-[12px] bg-[#EFF6FF] border border-[#BFDBFE] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-[#2563EB] shrink-0" />
+                <span className="text-[12px] text-[#1E40AF] font-medium">
+                  Hall 측정 데이터가 <strong>'통합 리포트'</strong>에 자동 연계되었습니다. (농도: {result.carrier_concentration_cm3.toExponential(2)} cm⁻³)
+                </span>
+              </div>
+              {onNavigateToIntegrated && (
+                <button
+                  type="button"
+                  onClick={onNavigateToIntegrated}
+                  className="px-3 py-1 rounded-[8px] bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-[11px] font-bold transition flex items-center gap-1 shrink-0 cursor-pointer shadow-sm"
+                >
+                  <Share2 className="w-3 h-3" />
+                  통합 리포트에서 교차 분석 →
+                </button>
+              )}
             </div>
           )}
         </div>

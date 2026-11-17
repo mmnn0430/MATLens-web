@@ -184,6 +184,41 @@ export default function App() {
     }
   }, [openProject, refreshProjectsList]);
 
+  // Synchronize active XRD and SEM measurements to shared storage for Integrated Report
+  useEffect(() => {
+    if (activeRun?.xrd_result?.scherrer?.mean_nm) {
+      try {
+        localStorage.setItem(
+          "matlens_shared_xrd_data",
+          JSON.stringify({
+            crystallite_size_nm: activeRun.xrd_result.scherrer.mean_nm,
+            space_group: activeRun.xrd_result.phase_matching?.candidates?.[0]?.spacegroup || "F-43m",
+            sample_id: activeProject?.sample_name || "XRD-Sample",
+            formula: activeProject?.expected_formula || "Custom",
+            timestamp: new Date().toISOString(),
+          })
+        );
+      } catch (e) {
+        console.warn("Failed to persist XRD data to localStorage:", e);
+      }
+    }
+    if (activeRun?.sem_result?.summary_stats?.mean_um) {
+      try {
+        localStorage.setItem(
+          "matlens_shared_sem_data",
+          JSON.stringify({
+            grain_size_um: activeRun.sem_result.summary_stats.mean_um,
+            porosity_pct: activeRun.sem_result.porosity?.porosity_percent || 1.2,
+            sample_id: activeProject?.sample_name || "SEM-Sample",
+            timestamp: new Date().toISOString(),
+          })
+        );
+      } catch (e) {
+        console.warn("Failed to persist SEM data to localStorage:", e);
+      }
+    }
+  }, [activeRun, activeProject]);
+
   // Poll running job until completed or failed
   useEffect(() => {
     if (!activeRun || (activeRun.status !== "queued" && activeRun.status !== "running")) {
@@ -792,9 +827,19 @@ export default function App() {
         {serviceMode === "utm" ? (
           <UtmView />
         ) : serviceMode === "hall" ? (
-          <HallView />
+          <HallView
+            onNavigateToIntegrated={() => {
+              setServiceMode("integrated");
+              writeUrlState({ mode: "integrated" });
+            }}
+          />
         ) : serviceMode === "lfa" ? (
-          <LfaView />
+          <LfaView
+            onNavigateToIntegrated={() => {
+              setServiceMode("integrated");
+              writeUrlState({ mode: "integrated" });
+            }}
+          />
         ) : serviceMode === "integrated" ? (
           <IntegratedAnalysisView activeProject={activeProject} activeRun={activeRun} />
         ) : viewMode === "setup" || !activeProject ? (

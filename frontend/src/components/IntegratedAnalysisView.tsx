@@ -10,11 +10,11 @@ import {
   Layers,
   Loader2,
   MessageSquare,
+  RefreshCw,
   Send,
   Share2,
   ShieldCheck,
   Sparkles,
-  Zap,
 } from "lucide-react";
 import { api } from "../api";
 import { PlotlyChart } from "./PlotlyChart";
@@ -60,7 +60,7 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
   const [densityGcm3, setDensityGcm3] = useState<number>(8.25);
   const [cpJgK, setCpJgK] = useState<number>(0.28);
 
-  const [hasUtm, setHasUtm] = useState<boolean>(false);
+  const [hasUtm] = useState<boolean>(false);
   const [youngsModulus] = useState<number>(180);
 
   // Results State
@@ -88,86 +88,154 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
     },
   ]);
 
-  // Load Preset Scenarios
-  const loadScenario = (type: "nbfesb" | "si" | "pyroceram" | "active") => {
-    if (type === "nbfesb") {
-      setSampleId("NbFeSb-SPS-01");
-      setMaterialName("NbFeSb half-Heusler");
-      setChemicalFormula("NbFeSb");
-      setDopant("Ti (5 at%)");
-      setTempK(300);
-      setHasXrd(true);
-      setCrystalliteNm(42.5);
-      setSpaceGroup("F-43m");
-      setHasSem(true);
-      setGrainSizeUm(2.4);
-      setPorosityPct(1.2);
-      setHasHall(true);
-      setCarrierConc(4.2e20);
-      setHallMobility(22.0);
-      setElecCond(1500.0);
-      setCarrierType("p-type (Hole)");
-      setHasLfa(true);
-      setThermalDiff(2.1);
-      setThermalCond(4.8);
-      setDensityGcm3(8.25);
-      setCpJgK(0.28);
-      setHasUtm(false);
-    } else if (type === "si") {
-      setSampleId("Si-Wafer-N-01");
-      setMaterialName("n-type Silicon (P-doped)");
-      setChemicalFormula("Si");
-      setDopant("Phosphorus (P, ~1e16 cm⁻³)");
-      setTempK(300);
-      setHasXrd(true);
-      setCrystalliteNm(78.0);
-      setSpaceGroup("Fd-3m");
-      setHasSem(true);
-      setGrainSizeUm(15.0);
-      setPorosityPct(0.1);
-      setHasHall(true);
-      setCarrierConc(4.2e16);
-      setHallMobility(1150.0);
-      setElecCond(7.73);
-      setCarrierType("n-type (Electron)");
-      setHasLfa(true);
-      setThermalDiff(88.0);
-      setThermalCond(142.0);
-      setDensityGcm3(2.33);
-      setCpJgK(0.71);
-      setHasUtm(false);
-    } else if (type === "pyroceram") {
-      setSampleId("Pyroceram-9606-Std");
-      setMaterialName("Pyroceram 9606 (Standard Reference)");
-      setChemicalFormula("Li2O-Al2O3-SiO2 Glass Ceramic");
-      setDopant("TiO2 Nucleating Agent");
-      setTempK(298);
-      setHasXrd(true);
-      setCrystalliteNm(35.0);
-      setSpaceGroup("P622");
-      setHasSem(true);
-      setGrainSizeUm(0.8);
-      setPorosityPct(0.3);
-      setHasHall(false);
-      setHasLfa(true);
-      setThermalDiff(1.93);
-      setThermalCond(4.11);
-      setDensityGcm3(2.60);
-      setCpJgK(0.82);
-      setHasUtm(false);
-    } else if (type === "active" && activeProject) {
-      setSampleId(activeProject.sample_name || "Project-Sample");
-      setMaterialName(activeProject.sample_name || "Custom Material");
-      setChemicalFormula(activeProject.expected_formula || "Custom");
-      if (activeRun?.xrd_result?.scherrer?.mean_nm) {
+  // Multi-Instrument Pipeline Integration Status
+  const [pipelineStatus, setPipelineStatus] = useState<{
+    hall: boolean;
+    lfa: boolean;
+    xrd: boolean;
+    sem: boolean;
+    sources: string[];
+    sourceSummary: string;
+  }>({
+    hall: false,
+    lfa: false,
+    xrd: false,
+    sem: false,
+    sources: [],
+    sourceSummary: "측정 데이터 연계 확인 중...",
+  });
+
+  // Load Single Standard Benchmark Preset (NbFeSb Thermoelectric half-Heusler)
+  const loadBenchmarkPreset = () => {
+    setSampleId("NbFeSb-SPS-01");
+    setMaterialName("NbFeSb half-Heusler");
+    setChemicalFormula("NbFeSb");
+    setDopant("Ti (5 at%)");
+    setTempK(300);
+    setHasXrd(true);
+    setCrystalliteNm(42.5);
+    setSpaceGroup("F-43m");
+    setHasSem(true);
+    setGrainSizeUm(2.4);
+    setPorosityPct(1.2);
+    setHasHall(true);
+    setCarrierConc(4.2e20);
+    setHallMobility(22.0);
+    setElecCond(1500.0);
+    setCarrierType("p-type (Hole)");
+    setHasLfa(true);
+    setThermalDiff(2.1);
+    setThermalCond(4.8);
+    setDensityGcm3(8.25);
+    setCpJgK(0.28);
+    setPipelineStatus({
+      hall: true,
+      lfa: true,
+      xrd: true,
+      sem: true,
+      sources: ["NbFeSb 표준 벤치마크 (XRD+SEM+Hall+LFA 전주기)"],
+      sourceSummary: "표준 벤치마크 샘플(NbFeSb) 전주기 데이터 연계 완료",
+    });
+  };
+
+  // Continuous Flow: Synchronize measured data from other tabs (Hall, LFA, XRD, SEM)
+  const syncMeasuredData = (): boolean => {
+    const loadedSources: string[] = [];
+
+    // 1. Hall Effect Tab Data
+    try {
+      const hRaw = localStorage.getItem("matlens_shared_hall_data");
+      if (hRaw) {
+        const h = JSON.parse(hRaw);
+        setHasHall(true);
+        if (h.carrier_concentration_cm3) setCarrierConc(h.carrier_concentration_cm3);
+        if (h.hall_mobility_cm2_Vs) setHallMobility(h.hall_mobility_cm2_Vs);
+        if (h.electrical_conductivity_S_cm) setElecCond(h.electrical_conductivity_S_cm);
+        if (h.carrier_type) setCarrierType(h.carrier_type);
+        if (h.sample_id) setSampleId(h.sample_id);
+        if (h.material_name) setMaterialName(h.material_name);
+        if (h.dopant) setDopant(h.dopant);
+        loadedSources.push("Hall 전하수송(실측)");
+      }
+    } catch (e) {
+      console.warn("Hall data parse error:", e);
+    }
+
+    // 2. LFA Tab Data
+    try {
+      const lRaw = localStorage.getItem("matlens_shared_lfa_data");
+      if (lRaw) {
+        const l = JSON.parse(lRaw);
+        setHasLfa(true);
+        if (l.thermal_diffusivity_mm2_s) setThermalDiff(l.thermal_diffusivity_mm2_s);
+        if (l.thermal_conductivity_W_mK) setThermalCond(l.thermal_conductivity_W_mK);
+        if (l.density_g_cm3) setDensityGcm3(l.density_g_cm3);
+        if (l.specific_heat_J_gK) setCpJgK(l.specific_heat_J_gK);
+        if (l.sample_id && !loadedSources.some((s) => s.includes("Hall"))) setSampleId(l.sample_id);
+        if (l.material_name && !loadedSources.some((s) => s.includes("Hall"))) setMaterialName(l.material_name);
+        loadedSources.push("LFA 열수송(실측)");
+      }
+    } catch (e) {
+      console.warn("LFA data parse error:", e);
+    }
+
+    // 3. XRD Tab Data
+    try {
+      const xRaw = localStorage.getItem("matlens_shared_xrd_data");
+      if (xRaw) {
+        const x = JSON.parse(xRaw);
+        setHasXrd(true);
+        if (x.crystallite_size_nm) setCrystalliteNm(Number(x.crystallite_size_nm.toFixed(1)));
+        if (x.space_group) setSpaceGroup(x.space_group);
+        loadedSources.push("XRD 결정구조(실측)");
+      } else if (activeRun?.xrd_result?.scherrer?.mean_nm) {
         setHasXrd(true);
         setCrystalliteNm(Number(activeRun.xrd_result.scherrer.mean_nm.toFixed(1)));
+        loadedSources.push("XRD 결정구조(현재 작업)");
       }
-      if (activeRun?.sem_result?.summary_stats?.mean_um) {
+    } catch (e) {
+      console.warn("XRD data parse error:", e);
+    }
+
+    // 4. SEM Tab Data
+    try {
+      const sRaw = localStorage.getItem("matlens_shared_sem_data");
+      if (sRaw) {
+        const s = JSON.parse(sRaw);
+        setHasSem(true);
+        if (s.grain_size_um) setGrainSizeUm(Number(s.grain_size_um.toFixed(2)));
+        if (s.porosity_pct) setPorosityPct(Number(s.porosity_pct.toFixed(1)));
+        loadedSources.push("SEM 미세조직(실측)");
+      } else if (activeRun?.sem_result?.summary_stats?.mean_um) {
         setHasSem(true);
         setGrainSizeUm(Number(activeRun.sem_result.summary_stats.mean_um.toFixed(2)));
+        loadedSources.push("SEM 미세조직(현재 작업)");
       }
+    } catch (e) {
+      console.warn("SEM data parse error:", e);
     }
+
+    if (activeProject) {
+      if (activeProject.sample_name && !loadedSources.some((s) => s.includes("Hall") || s.includes("LFA"))) {
+        setSampleId(activeProject.sample_name);
+        setMaterialName(activeProject.sample_name);
+      }
+      if (activeProject.expected_formula) setChemicalFormula(activeProject.expected_formula);
+    }
+
+    const hasAnyLive = loadedSources.length > 0;
+    setPipelineStatus({
+      hall: loadedSources.some((s) => s.includes("Hall")),
+      lfa: loadedSources.some((s) => s.includes("LFA")),
+      xrd: loadedSources.some((s) => s.includes("XRD")),
+      sem: loadedSources.some((s) => s.includes("SEM")),
+      sources: loadedSources,
+      sourceSummary: hasAnyLive
+        ? `${loadedSources.join(" + ")} 실측 데이터 연계 활성화`
+        : "개별 탭 측정 데이터 없음 (표준 벤치마크 샘플 로드 권장)",
+    });
+
+    return hasAnyLive;
   };
 
   // Run Integration
@@ -265,8 +333,12 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
     setAiReport(report);
   };
 
-  // Run on mount with default NbFeSb scenario
+  // On mount: attempt to synchronize live measured data from tabs, otherwise load standard benchmark sample
   useEffect(() => {
+    const hasLive = syncMeasuredData();
+    if (!hasLive) {
+      loadBenchmarkPreset();
+    }
     executeIntegration();
   }, []);
 
@@ -414,43 +486,89 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
         </div>
       </div>
 
-      {/* Preset Buttons */}
-      <div className="flex flex-wrap items-center gap-2 bg-[#F8FAFC] p-3 rounded-[16px] border border-[#E2E8F0]">
-        <span className="text-[12px] font-bold text-[#64748B] mr-1">분석 시나리오 프리셋:</span>
-        <button
-          type="button"
-          onClick={() => loadScenario("nbfesb")}
-          className="px-3 py-1.5 rounded-[10px] bg-white border border-[#CBD5E1] text-[12px] font-semibold text-[#1E293B] hover:bg-[#F1F5F9] transition flex items-center gap-1.5 cursor-pointer"
-        >
-          <Activity className="w-3.5 h-3.5 text-[#7C3AED]" />
-          NbFeSb 열전 하프-호이슬러 (전체 기기)
-        </button>
-        <button
-          type="button"
-          onClick={() => loadScenario("si")}
-          className="px-3 py-1.5 rounded-[10px] bg-white border border-[#CBD5E1] text-[12px] font-semibold text-[#1E293B] hover:bg-[#F1F5F9] transition flex items-center gap-1.5 cursor-pointer"
-        >
-          <Zap className="w-3.5 h-3.5 text-[#2563EB]" />
-          n형 Si 반도체 웨이퍼 (Hall + XRD)
-        </button>
-        <button
-          type="button"
-          onClick={() => loadScenario("pyroceram")}
-          className="px-3 py-1.5 rounded-[10px] bg-white border border-[#CBD5E1] text-[12px] font-semibold text-[#1E293B] hover:bg-[#F1F5F9] transition flex items-center gap-1.5 cursor-pointer"
-        >
-          <Flame className="w-3.5 h-3.5 text-[#D97706]" />
-          Pyroceram 9606 표준 시편 (LFA + XRD)
-        </button>
-        {activeProject && (
-          <button
-            type="button"
-            onClick={() => loadScenario("active")}
-            className="px-3 py-1.5 rounded-[10px] bg-[#EFF6FF] border border-[#BFDBFE] text-[12px] font-bold text-[#1D4ED8] hover:bg-[#DBEAFE] transition flex items-center gap-1.5 cursor-pointer"
-          >
-            <Layers className="w-3.5 h-3.5" />
-            현재 작업 중인 시료 불러오기 ({activeProject.sample_name})
-          </button>
-        )}
+      {/* Continuous Measurement Pipeline Status Bar */}
+      <div className="bg-[#F8FAFC] rounded-[18px] p-5 border border-[#CBD5E1] space-y-3 shadow-sm">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-[#E2E8F0] pb-2.5">
+          <div className="flex items-center gap-2">
+            <Cpu className="w-5 h-5 text-[#7C3AED]" />
+            <h3 className="text-[14px] font-bold text-[#1E293B]">다종 기기 측정 데이터 연속 흐름 파이프라인</h3>
+            <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-[#EDE9FE] text-[#6D28D9]">
+              {pipelineStatus.sourceSummary}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                syncMeasuredData();
+                executeIntegration();
+              }}
+              className="px-3.5 py-1.5 rounded-[10px] bg-white border border-[#CBD5E1] hover:bg-[#F1F5F9] text-[#1E293B] text-[12px] font-bold flex items-center gap-1.5 cursor-pointer shadow-sm transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-[#2563EB]" />
+              내 실측 데이터로 전체 동기화
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                loadBenchmarkPreset();
+                executeIntegration();
+              }}
+              className="px-3.5 py-1.5 rounded-[10px] bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-[12px] font-bold flex items-center gap-1.5 cursor-pointer shadow-sm transition"
+            >
+              <Activity className="w-3.5 h-3.5" />
+              표준 벤치마크 샘플(NbFeSb) 로드
+            </button>
+          </div>
+        </div>
+
+        {/* 4-Instrument Data Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-[12px]">
+          <div className={`p-3 rounded-[12px] border transition ${pipelineStatus.xrd ? "bg-[#EFF6FF] border-[#BFDBFE] text-[#1E40AF]" : "bg-white border-[#E2E8F0] text-[#64748B]"}`}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-bold">XRD 결정구조</span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${pipelineStatus.xrd ? "bg-[#DBEAFE] text-[#1D4ED8]" : "bg-[#F1F5F9] text-[#94A3B8]"}`}>
+                {pipelineStatus.xrd ? "실측 연계됨" : "기본값"}
+              </span>
+            </div>
+            <div className="text-[13px] font-bold text-[#1E293B]">{hasXrd ? `D = ${crystalliteNm} nm` : "미측정"}</div>
+            <span className="text-[11px] text-[#64748B]">공간군: {spaceGroup}</span>
+          </div>
+
+          <div className={`p-3 rounded-[12px] border transition ${pipelineStatus.sem ? "bg-[#EFF6FF] border-[#BFDBFE] text-[#1E40AF]" : "bg-white border-[#E2E8F0] text-[#64748B]"}`}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-bold">SEM 미세조직</span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${pipelineStatus.sem ? "bg-[#DBEAFE] text-[#1D4ED8]" : "bg-[#F1F5F9] text-[#94A3B8]"}`}>
+                {pipelineStatus.sem ? "실측 연계됨" : "기본값"}
+              </span>
+            </div>
+            <div className="text-[13px] font-bold text-[#1E293B]">{hasSem ? `입경 = ${grainSizeUm} µm` : "미측정"}</div>
+            <span className="text-[11px] text-[#64748B]">기공률: {porosityPct}%</span>
+          </div>
+
+          <div className={`p-3 rounded-[12px] border transition ${pipelineStatus.hall ? "bg-[#EDE9FE] border-[#DDD6FE] text-[#6D28D9]" : "bg-white border-[#E2E8F0] text-[#64748B]"}`}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-bold">Hall 전하수송</span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${pipelineStatus.hall ? "bg-[#EDE9FE] text-[#7C3AED]" : "bg-[#F1F5F9] text-[#94A3B8]"}`}>
+                {pipelineStatus.hall ? "실측 연계됨" : "기본값"}
+              </span>
+            </div>
+            <div className="text-[13px] font-bold text-[#1E293B]">{hasHall ? `n = ${carrierConc.toExponential(1)} cm⁻³` : "미측정"}</div>
+            <span className="text-[11px] text-[#64748B]">이동도: {hallMobility.toFixed(1)} cm²/Vs</span>
+          </div>
+
+          <div className={`p-3 rounded-[12px] border transition ${pipelineStatus.lfa ? "bg-[#FFFBEB] border-[#FDE68A] text-[#B45309]" : "bg-white border-[#E2E8F0] text-[#64748B]"}`}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-bold">LFA 열수송</span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${pipelineStatus.lfa ? "bg-[#FEF3C7] text-[#D97706]" : "bg-[#F1F5F9] text-[#94A3B8]"}`}>
+                {pipelineStatus.lfa ? "실측 연계됨" : "기본값"}
+              </span>
+            </div>
+            <div className="text-[13px] font-bold text-[#1E293B]">{hasLfa ? `κ = ${thermalCond.toFixed(2)} W/m·K` : "미측정"}</div>
+            <span className="text-[11px] text-[#64748B]">열확산도: {thermalDiff.toFixed(2)} mm²/s</span>
+          </div>
+        </div>
       </div>
 
       {/* Dataset Association & Parameters */}
