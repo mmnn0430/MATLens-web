@@ -168,8 +168,8 @@ export function LandingSetup({
               </p>
             </div>
 
-            <div className="mt-6 pt-6 border-t border-[#E5E8EB] flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
-              <div>
+            <div className="mt-6 pt-6 border-t border-[#E5E8EB] flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4">
+              <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-[14px] font-semibold text-[#191F28]">
                     처음 오셨나요? 검증용 샘플 데이터로 전체 과정을 바로 체험해보세요

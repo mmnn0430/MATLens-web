@@ -579,9 +579,9 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-[#F7F8FA] text-[#191F28]">
       {/* Top Navigation Header */}
-      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-[#E5E8EB]">
-        <div className="max-w-[1600px] mx-auto px-4 sm:px-8 h-16 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
+      <header className="sticky top-0 z-40 w-full bg-white/95 backdrop-blur border-b border-[#E5E8EB]">
+        <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-8 min-h-16 py-2 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
               type="button"
               onClick={() => {
@@ -600,7 +600,7 @@ export default function App() {
             </button>
 
             {/* Service Mode Toggle Switcher */}
-            <div className="flex flex-wrap items-center p-0.5 rounded-[10px] bg-[#F2F4F6] border border-[#E5E8EB] ml-1 sm:ml-2 gap-0.5">
+            <div className="flex items-center p-0.5 rounded-[10px] bg-[#F2F4F6] border border-[#E5E8EB] ml-1 sm:ml-2 gap-0.5 shrink-0 whitespace-nowrap">
               <button
                 type="button"
                 onClick={() => {
@@ -678,9 +678,9 @@ export default function App() {
 
             {serviceMode === "matlens" && activeProject && (
               <>
-                <span className="text-[#E5E8EB] text-[18px]">/</span>
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-[14px] sm:text-[15px] font-semibold text-[#191F28] truncate">
+                <span className="hidden xl:inline text-[#E5E8EB] text-[18px]">/</span>
+                <div className="hidden xl:flex items-center gap-2 min-w-0 max-w-[260px] 2xl:max-w-[420px] overflow-hidden">
+                  <span className="text-[14px] font-semibold text-[#191F28] truncate">
                     {activeProject.sample_name}
                   </span>
                   {activeProject.is_sample_demo && <SourceTag kind="샘플" />}

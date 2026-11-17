@@ -74,6 +74,14 @@ function readSessionIdFromUrl(): string | null {
   return sp.get("session") || localStorage.getItem("matlens_active_comparison_session_id");
 }
 
+function fmtNum(val: any, digits = 2, fallback = "-"): string {
+  const n = typeof val === "number" ? val : Number(val);
+  if (val === null || val === undefined || val === "" || !Number.isFinite(n)) {
+    return fallback;
+  }
+  return n.toFixed(digits);
+}
+
 function writeSessionIdToUrl(sessionId: string | null) {
   if (!sessionId) return;
   try {
@@ -1304,7 +1312,7 @@ export function IntegratedAnalysisView({ activeProject, activeRun: _activeRun }:
                           파일: <strong>{xrdInfo.original_filename}</strong> (Run #{xrdInfo.run_number})
                         </div>
                         <div>
-                          조건: {xrdInfo.xray_source} · 범위 {xrdInfo.two_theta_min.toFixed(1)}°~{xrdInfo.two_theta_max.toFixed(1)}°
+                          조건: {xrdInfo.xray_source} · 범위 {fmtNum(xrdInfo.two_theta_min, 1)}°~{fmtNum(xrdInfo.two_theta_max, 1)}°
                         </div>
                       </div>
                     ) : (
@@ -1585,7 +1593,7 @@ export function IntegratedAnalysisView({ activeProject, activeRun: _activeRun }:
                       {row.hkl ? <span className="text-[#1D4ED8]">({row.hkl})</span> : <span className="text-[#64748B]">(미할당)</span>}
                     </td>
                     <td className="py-2.5 px-3 font-mono text-[#475569]">
-                      {row.ref_two_theta ? `${row.ref_two_theta.toFixed(2)}°` : `~${row.anchor_two_theta.toFixed(2)}°`}
+                      {row.ref_two_theta != null ? `${fmtNum(row.ref_two_theta, 2)}°` : `~${fmtNum(row.anchor_two_theta, 2)}°`}
                     </td>
                     {(row.per_specimen || []).map((ps: any) => {
                       if (ps.status === "detected") {
@@ -1599,10 +1607,10 @@ export function IntegratedAnalysisView({ activeProject, activeRun: _activeRun }:
                             }`}
                           >
                             <div className="font-mono text-[#0F172A]">
-                              <strong>{ps.two_theta.toFixed(2)}°</strong>{" "}
+                              <strong>{fmtNum(ps.two_theta, 2)}°</strong>{" "}
                               <span className="text-[#1D4ED8] text-[11px]">
-                                (Δ={ps.delta_vs_baseline_deg > 0 ? "+" : ""}
-                                {ps.delta_vs_baseline_deg.toFixed(2)}°)
+                                (Δ={(ps.delta_vs_baseline_deg ?? 0) > 0 ? "+" : ""}
+                                {fmtNum(ps.delta_vs_baseline_deg ?? 0, 2)}°)
                               </span>
                             </div>
                             <div className="text-[11px] text-[#475569]">
@@ -1656,7 +1664,7 @@ export function IntegratedAnalysisView({ activeProject, activeRun: _activeRun }:
                       [{sl.slot_index}] {sl.sample_name}
                     </span>
                     <span className="text-[11px] font-mono text-[#475569]">
-                      λ = {xrd.wavelength_A} Å · 범위 {xrd.two_theta_min.toFixed(1)}°~{xrd.two_theta_max.toFixed(1)}°
+                      λ = {xrd.wavelength_A} Å · 범위 {fmtNum(xrd.two_theta_min, 1)}°~{fmtNum(xrd.two_theta_max, 1)}°
                     </span>
                   </div>
 
@@ -1748,9 +1756,15 @@ export function IntegratedAnalysisView({ activeProject, activeRun: _activeRun }:
                         [{pk.slot_index}] {pk.sample_name.replace("[검증시리즈] ", "")}
                       </td>
                       <td className="py-2 px-2.5 font-mono">{pk.peak_id}</td>
-                      <td className="py-2 px-2.5 font-mono font-bold text-[#0F172A]">{pk.two_theta.toFixed(3)}°</td>
+                      <td className="py-2 px-2.5 font-mono font-bold text-[#0F172A]">{fmtNum(pk.two_theta, 3)}°</td>
                       <td className="py-2 px-2.5 font-mono text-[#1D4ED8]">
-                        {pk.ref_two_theta ? `${pk.ref_two_theta.toFixed(3)}° (${pk.delta_ref_deg > 0 ? "+" : ""}${pk.delta_ref_deg.toFixed(3)}°)` : "-"}
+                        {pk.ref_two_theta != null
+                          ? `${fmtNum(pk.ref_two_theta, 3)}° (${
+                              pk.delta_ref_deg != null
+                                ? `${pk.delta_ref_deg > 0 ? "+" : ""}${fmtNum(pk.delta_ref_deg, 3)}°`
+                                : fmtNum((pk.two_theta ?? 0) - pk.ref_two_theta, 3) + "°"
+                            })`
+                          : "-"}
                       </td>
                       <td className="py-2 px-2.5 font-mono">{pk.d_spacing_A ? `${pk.d_spacing_A} Å` : "-"}</td>
                       <td className="py-2 px-2.5 font-mono">{pk.rel_intensity_pct}%</td>
@@ -1990,7 +2004,7 @@ export function IntegratedAnalysisView({ activeProject, activeRun: _activeRun }:
                     <div className="pt-1.5 border-t border-[#F1F5F9] flex justify-between text-[11px]">
                       <span className="text-[#1D4ED8] font-bold">XRD Scherrer 결정자 크기 (별개 항목):</span>
                       <strong className="text-[#1E40AF]">
-                        {xrd?.scherrer_mean_nm ? `${xrd.scherrer_mean_nm.toFixed(1)} nm (간섭 산란 도메인)` : "미산출"}
+                        {xrd?.scherrer_mean_nm != null ? `${fmtNum(xrd.scherrer_mean_nm, 1)} nm (간섭 산란 도메인)` : "미산출"}
                       </strong>
                     </div>
                   </div>

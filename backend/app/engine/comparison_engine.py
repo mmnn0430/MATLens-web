@@ -1142,7 +1142,11 @@ def build_full_comparison_report_data(
                     phase_formula = primary_cand["formula"]
                     hkl_str = m_info.get("hkl")
                     ref_tt = m_info.get("ref_two_theta")
-                    delta_ref = m_info.get("delta_deg")
+                    delta_ref = (
+                        m_info.get("delta_deg")
+                        if m_info.get("delta_deg") is not None
+                        else ((p_tt - float(ref_tt)) if ref_tt is not None else 0.0)
+                    )
                     phase_role = "주상 (Primary Phase)"
                     marker_symbol = "circle"
                     marker_label = "●"
@@ -1154,7 +1158,11 @@ def build_full_comparison_report_data(
                     phase_formula = sev["formula"]
                     hkl_str = m_info.get("hkl") if sev["verdict_code"] == "supported_multi_reflection" else f"{m_info.get('hkl')}?"
                     ref_tt = m_info.get("ref_two_theta")
-                    delta_ref = m_info.get("delta_deg")
+                    delta_ref = (
+                        m_info.get("delta_deg")
+                        if m_info.get("delta_deg") is not None
+                        else ((p_tt - float(ref_tt)) if ref_tt is not None else 0.0)
+                    )
                     phase_role = f"이차상 후보 ({sev['verdict_badge']})"
                     marker_symbol = "diamond" if sev["verdict_code"] == "supported_multi_reflection" else "triangle-up"
                     marker_label = "◆" if sev["verdict_code"] == "supported_multi_reflection" else "△"
