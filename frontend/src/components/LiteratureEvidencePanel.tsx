@@ -1,17 +1,14 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import {
   BookOpen,
-  CheckCircle2,
   ExternalLink,
-  HelpCircle,
   MessageSquare,
   Search,
   Send,
   ShieldCheck,
-  Sparkles,
 } from "lucide-react";
 import { api } from "../api";
-import type { GroundedClaim, LiteratureReference } from "../types";
+import type { LiteratureReference } from "../types";
 
 export function LiteratureEvidencePanel() {
   const [materialName, setMaterialName] = useState<string>("Silicon (Si)");

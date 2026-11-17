@@ -1,14 +1,8 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import {
   Activity,
-  AlertTriangle,
   BookOpen,
-  CheckCircle2,
-  Download,
-  FileText,
-  HelpCircle,
   Info,
-  Layers,
   Sparkles,
   Upload,
   Zap,

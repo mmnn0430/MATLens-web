@@ -1,16 +1,11 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import {
   Activity,
-  ArrowRight,
-  BookOpen,
-  CheckCircle2,
   Cpu,
   Flame,
   Layers,
-  Microscope,
   Share2,
   Sparkles,
-  Zap,
 } from "lucide-react";
 import { api } from "../api";
 import { PlotlyChart } from "./PlotlyChart";
@@ -39,7 +34,7 @@ export function IntegratedAnalysisView() {
   const [thermalCond, setThermalCond] = useState<number>(4.8);
 
   const [hasUtm, setHasUtm] = useState<boolean>(false);
-  const [youngsModulus, setYoungsModulus] = useState<number>(180);
+  const youngsModulus = 180;
 
   const [loading, setLoading] = useState<boolean>(false);
   const [result, setResult] = useState<IntegratedAnalysisResult | null>(null);

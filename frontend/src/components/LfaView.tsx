@@ -1,14 +1,11 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import {
   Activity,
   AlertCircle,
   AlertTriangle,
   BookOpen,
-  CheckCircle2,
-  FileText,
   Flame,
   Info,
-  Layers,
   Sparkles,
   Upload,
 } from "lucide-react";
@@ -36,7 +33,6 @@ export function LfaView() {
 
   const loadBenchmarkSample = () => {
     // Benchmark Pyroceram 9606 standard (2.50 mm thickness, 2.60 g/cm^3, Cp = 0.82 J/g*K)
-    const tValues = [-0.1, -0.05, 0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.5];
     const header = `# MatLens Benchmark Pyroceram 9606 Standard\n# Thickness: 2.50 mm | Density: 2.60 g/cm^3 | Cp: 0.82 J/(g*K)\nTime_s,RearTemperature_C\n`;
     const rows = [
       "-0.100,24.50", "-0.050,24.50", "0.000,24.51", "0.050,24.52", "0.100,24.55",
