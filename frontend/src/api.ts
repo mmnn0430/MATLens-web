@@ -326,4 +326,42 @@ export const api = {
     const r = await fetch("/api/v1/health");
     return handleJson<any>(r);
   },
+
+  chatAssistant: async (payload: {
+    message: string;
+    history?: { role: string; content: string }[];
+    material_name?: string;
+    chemical_composition?: string;
+    instrument?: string;
+    calculated_properties?: any;
+    references?: any[];
+  }) => {
+    const r = await fetch("/api/v1/assistant/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  downloadScientificPdfReport: async (payload: any, filename?: string) => {
+    const r = await fetch("/api/v1/reports/pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const err = await r.text();
+      throw new Error(`PDF 생성 실패: ${err || r.statusText}`);
+    }
+    const blob = await r.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename || `MatLens2_Scientific_Report_${payload.sample_id || "Sample"}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
 };

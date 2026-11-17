@@ -12,7 +12,6 @@ import {
   Zap,
   Flame,
   Share2,
-  BookOpen,
 } from "lucide-react";
 import { api, DEFAULT_SEM_PARAMS, DEFAULT_XRD_PARAMS } from "./api";
 import type {
@@ -26,15 +25,13 @@ import type {
 import { LandingSetup } from "./components/LandingSetup";
 import { XrdView } from "./components/XrdView";
 import { SemView } from "./components/SemView";
-import { IntegratedReportView } from "./components/IntegratedReportView";
 import { UtmView } from "./components/UtmView";
 import { HallView } from "./components/HallView";
 import { LfaView } from "./components/LfaView";
 import { IntegratedAnalysisView } from "./components/IntegratedAnalysisView";
-import { LiteratureEvidencePanel } from "./components/LiteratureEvidencePanel";
 import { Button, SourceTag } from "./components/ui/primitives";
 
-export type ServiceMode = "matlens" | "utm" | "hall" | "lfa" | "integrated" | "literature";
+export type ServiceMode = "matlens" | "utm" | "hall" | "lfa" | "integrated";
 
 function readUrlState() {
   const sp = new URLSearchParams(window.location.search);
@@ -78,7 +75,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<"setup" | "results">("setup");
   const [activeTab, setActiveTab] = useState<"xrd" | "sem" | "report">("report");
   const [isBusy, setIsBusy] = useState<boolean>(false);
-  const [isRetryingAi, setIsRetryingAi] = useState<boolean>(false);
+  const [, setIsRetryingAi] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showGlobalApiPanel, setShowGlobalApiPanel] = useState<boolean>(false);
   const [globalGeminiKey, setGlobalGeminiKey] = useState<string>("");
@@ -475,7 +472,8 @@ export default function App() {
     }
   };
 
-  const handleSelectSavedRun = async (runId: string) => {
+  // Legacy run selection helper retained for backward compatibility
+  const _handleSelectSavedRun = async (runId: string) => {
     if (!activeProject) return;
     setIsBusy(true);
     try {
@@ -490,6 +488,7 @@ export default function App() {
       setIsBusy(false);
     }
   };
+  void _handleSelectSavedRun;
 
   const isJobRunning = activeRun?.status === "queued" || activeRun?.status === "running";
 
@@ -589,22 +588,7 @@ export default function App() {
                 }`}
               >
                 <Share2 className="w-3 h-3 text-[#7C3AED]" />
-                통합 연계
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setServiceMode("literature");
-                  writeUrlState({ mode: "literature" });
-                }}
-                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 ${
-                  serviceMode === "literature"
-                    ? "bg-white text-[#0284C7] shadow-sm font-bold"
-                    : "text-[#6B7684] hover:text-[#191F28]"
-                }`}
-              >
-                <BookOpen className="w-3 h-3 text-[#0284C7]" />
-                문헌 RAG
+                통합 리포트
               </button>
             </div>
 
@@ -812,9 +796,7 @@ export default function App() {
         ) : serviceMode === "lfa" ? (
           <LfaView />
         ) : serviceMode === "integrated" ? (
-          <IntegratedAnalysisView />
-        ) : serviceMode === "literature" ? (
-          <LiteratureEvidencePanel />
+          <IntegratedAnalysisView activeProject={activeProject} activeRun={activeRun} />
         ) : viewMode === "setup" || !activeProject ? (
           <LandingSetup
             health={health}
@@ -953,13 +935,7 @@ export default function App() {
                 </Tabs.Content>
 
                 <Tabs.Content value="report" className="outline-none">
-                  <IntegratedReportView
-                    project={activeProject}
-                    run={activeRun}
-                    isRetryingAi={isRetryingAi}
-                    onRetryAi={handleRetryAi}
-                    onSelectRun={handleSelectSavedRun}
-                  />
+                  <IntegratedAnalysisView activeProject={activeProject} activeRun={activeRun} />
                 </Tabs.Content>
               </Tabs.Root>
             )}

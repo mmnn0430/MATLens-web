@@ -17,7 +17,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 
 try:
@@ -31,7 +31,11 @@ try:
         analyze_lfa_transient,
         parse_lfa_data,
     )
-    from .services.ai.vertex_gemini import generate_structured_scientific_interpretation
+    from .engine.pdf_report_v2 import generate_scientific_pdf_report_v2
+    from .services.ai.vertex_gemini import (
+        answer_research_assistant_query,
+        generate_structured_scientific_interpretation,
+    )
     from .services.cloud.telemetry import (
         get_telemetry_metrics,
         log_structured_event,
@@ -53,7 +57,11 @@ except ImportError:
         analyze_lfa_transient,
         parse_lfa_data,
     )
-    from backend.app.services.ai.vertex_gemini import generate_structured_scientific_interpretation
+    from backend.app.engine.pdf_report_v2 import generate_scientific_pdf_report_v2
+    from backend.app.services.ai.vertex_gemini import (
+        answer_research_assistant_query,
+        generate_structured_scientific_interpretation,
+    )
     from backend.app.services.cloud.telemetry import (
         get_telemetry_metrics,
         log_structured_event,
@@ -132,6 +140,31 @@ class IntegratedAnalysisRequest(BaseModel):
     hall_data: Optional[Dict[str, Any]] = None
     lfa_data: Optional[Dict[str, Any]] = None
     utm_data: Optional[Dict[str, Any]] = None
+
+
+class AssistantChatRequest(BaseModel):
+    message: str
+    history: Optional[List[Dict[str, str]]] = None
+    material_name: Optional[str] = None
+    chemical_composition: Optional[str] = None
+    instrument: Optional[str] = None
+    calculated_properties: Optional[Dict[str, Any]] = None
+    references: Optional[List[Dict[str, Any]]] = None
+
+
+class PdfReportRequest(BaseModel):
+    sample_id: str = "Sample-01"
+    material_name: str = "Material"
+    chemical_composition: Optional[str] = None
+    dopant: Optional[str] = None
+    temperature_K: float = 300.0
+    instruments_included: Optional[List[str]] = None
+    calculated_properties: Optional[Dict[str, Any]] = None
+    wiedemann_franz: Optional[Dict[str, Any]] = None
+    grain_correlation: Optional[Dict[str, Any]] = None
+    ai_interpretation: Optional[Dict[str, Any]] = None
+    references: Optional[List[Dict[str, Any]]] = None
+    grounding_claims: Optional[List[Dict[str, Any]]] = None
 
 
 # -------------------------------------------------------------------------
@@ -411,3 +444,47 @@ def verify_doi_endpoint(req: LiteratureVerifyRequest):
     if not verified:
         return {"doi": req.doi, "is_verified": False, "message": "DOI could not be verified on Crossref."}
     return verified
+
+
+@router.post("/assistant/chat")
+def assistant_chat_endpoint(req: AssistantChatRequest):
+    """Grounded Interactive Research Assistant Q&A endpoint."""
+    track_token_usage(300)
+    return answer_research_assistant_query(
+        question=req.message,
+        history=req.history,
+        material_name=req.material_name,
+        chemical_composition=req.chemical_composition,
+        instrument=req.instrument,
+        calculated_properties=req.calculated_properties,
+        references=req.references,
+    )
+
+
+@router.post("/reports/pdf")
+def export_scientific_pdf_endpoint(req: PdfReportRequest):
+    """Generates an elegant, highly readable Korean PDF scientific report."""
+    log_structured_event("PDF_REPORT_GENERATED", {
+        "sample_id": req.sample_id,
+        "material_name": req.material_name,
+    })
+    pdf_bytes = generate_scientific_pdf_report_v2(
+        sample_id=req.sample_id,
+        material_name=req.material_name,
+        chemical_composition=req.chemical_composition,
+        dopant=req.dopant,
+        temperature_K=req.temperature_K,
+        instruments_included=req.instruments_included,
+        calculated_properties=req.calculated_properties,
+        wiedemann_franz=req.wiedemann_franz,
+        grain_correlation=req.grain_correlation,
+        ai_interpretation=req.ai_interpretation,
+        references=req.references,
+        grounding_claims=req.grounding_claims,
+    )
+    safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', req.sample_id)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="MatLens2_Report_{safe_name}.pdf"'},
+    )

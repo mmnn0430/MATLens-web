@@ -317,7 +317,54 @@ def test_api_v1_endpoints(client):
     assert lfa_data["calculated_properties"]["thermal_diffusivity_mm2_s"] > 1.8
     assert lfa_data["calculated_properties"]["thermal_conductivity_W_mK"] > 3.9
 
-    # 5. Existing Health API check
+    # 5. Assistant Chat API
+    chat_resp = client.post(
+        "/api/v1/assistant/chat",
+        json={
+            "message": "도핑 농도가 이동도에 미치는 물리적 영향은 무엇인가요?",
+            "material_name": "Silicon",
+            "chemical_composition": "Si:P",
+            "instrument": "Hall Effect",
+            "calculated_properties": {"carrier_concentration_cm3": 4.2e16, "hall_mobility_cm2_Vs": 1150.0},
+        },
+    )
+    assert chat_resp.status_code == 200
+    chat_data = chat_resp.json()
+    assert "reply" in chat_data
+    assert len(chat_data["reply"]) > 50
+
+    # 6. PDF Report Generation API
+    pdf_resp = client.post(
+        "/api/v1/reports/pdf",
+        json={
+            "sample_id": "NbFeSb-SPS-01",
+            "material_name": "NbFeSb half-Heusler",
+            "chemical_composition": "NbFeSb",
+            "temperature_K": 300.0,
+            "calculated_properties": {
+                "carrier_concentration_cm3": 4.2e20,
+                "hall_mobility_cm2_Vs": 22.0,
+                "thermal_diffusivity_mm2_s": 2.1,
+                "thermal_conductivity_W_mK": 4.8,
+            },
+            "wiedemann_franz": {
+                "total_thermal_conductivity_W_mK": 4.8,
+                "electronic_thermal_conductivity_W_mK": 0.65,
+                "lattice_thermal_conductivity_W_mK": 4.15,
+                "lattice_fraction_pct": 86.5,
+                "electronic_fraction_pct": 13.5,
+            },
+            "ai_interpretation": {
+                "analysis_summary": "실온 측정 결과 포논 격자 열전도가 전체의 86.5%를 지배합니다.",
+                "data_quality_assessment": "높은 신호 대 잡음비 및 우수한 van der Pauw 선형 피팅.",
+            },
+        },
+    )
+    assert pdf_resp.status_code == 200
+    assert pdf_resp.headers["content-type"] == "application/pdf"
+    assert len(pdf_resp.content) > 1000
+
+    # 7. Existing Health API check
     legacy_h = client.get("/api/health")
     assert legacy_h.status_code == 200
 
