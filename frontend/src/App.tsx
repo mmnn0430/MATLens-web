@@ -9,6 +9,10 @@ import {
   Microscope,
   Activity,
   KeyRound,
+  Zap,
+  Flame,
+  Share2,
+  BookOpen,
 } from "lucide-react";
 import { api, DEFAULT_SEM_PARAMS, DEFAULT_XRD_PARAMS } from "./api";
 import type {
@@ -24,12 +28,18 @@ import { XrdView } from "./components/XrdView";
 import { SemView } from "./components/SemView";
 import { IntegratedReportView } from "./components/IntegratedReportView";
 import { UtmView } from "./components/UtmView";
+import { HallView } from "./components/HallView";
+import { LfaView } from "./components/LfaView";
+import { IntegratedAnalysisView } from "./components/IntegratedAnalysisView";
+import { LiteratureEvidencePanel } from "./components/LiteratureEvidencePanel";
 import { Button, SourceTag } from "./components/ui/primitives";
+
+export type ServiceMode = "matlens" | "utm" | "hall" | "lfa" | "integrated" | "literature";
 
 function readUrlState() {
   const sp = new URLSearchParams(window.location.search);
   return {
-    mode: (sp.get("mode") as "matlens" | "utm") || "matlens",
+    mode: (sp.get("mode") as ServiceMode) || "matlens",
     projectId: sp.get("project"),
     runId: sp.get("run"),
     view: (sp.get("view") as "setup" | "results") || null,
@@ -38,7 +48,7 @@ function readUrlState() {
 }
 
 function writeUrlState(next: {
-  mode?: "matlens" | "utm";
+  mode?: ServiceMode;
   projectId?: string | null;
   runId?: string | null;
   view?: "setup" | "results";
@@ -55,7 +65,7 @@ function writeUrlState(next: {
 }
 
 export default function App() {
-  const [serviceMode, setServiceMode] = useState<"matlens" | "utm">("matlens");
+  const [serviceMode, setServiceMode] = useState<ServiceMode>("matlens");
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null);
@@ -169,8 +179,8 @@ export default function App() {
       .catch(() => {});
     refreshProjectsList();
 
-    if (urlState.mode === "utm") {
-      setServiceMode("utm");
+    if (urlState.mode && urlState.mode !== "matlens") {
+      setServiceMode(urlState.mode);
     } else if (urlState.projectId) {
       if (urlState.tab) setActiveTab(urlState.tab);
       openProject(urlState.projectId, urlState.runId, urlState.view || undefined, true);
@@ -507,20 +517,20 @@ export default function App() {
             </button>
 
             {/* Service Mode Toggle Switcher */}
-            <div className="flex items-center p-0.5 rounded-[10px] bg-[#F2F4F6] border border-[#E5E8EB] ml-1 sm:ml-2">
+            <div className="flex flex-wrap items-center p-0.5 rounded-[10px] bg-[#F2F4F6] border border-[#E5E8EB] ml-1 sm:ml-2 gap-0.5">
               <button
                 type="button"
                 onClick={() => {
                   setServiceMode("matlens");
                   writeUrlState({ mode: "matlens", projectId: activeProject?.id, runId: activeRun?.id, view: viewMode, tab: activeTab });
                 }}
-                className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-[8px] text-[12px] sm:text-[13px] font-semibold transition-all ${
+                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all ${
                   serviceMode === "matlens"
                     ? "bg-white text-[#191F28] shadow-sm font-bold"
                     : "text-[#6B7684] hover:text-[#191F28]"
                 }`}
               >
-                XRD · SEM 분석
+                XRD·SEM
               </button>
               <button
                 type="button"
@@ -528,14 +538,73 @@ export default function App() {
                   setServiceMode("utm");
                   writeUrlState({ mode: "utm" });
                 }}
-                className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-[8px] text-[12px] sm:text-[13px] font-semibold transition-all flex items-center gap-1.5 ${
+                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all ${
                   serviceMode === "utm"
                     ? "bg-white text-[#3182F6] shadow-sm font-bold"
                     : "text-[#6B7684] hover:text-[#191F28]"
                 }`}
               >
-                <span>UTM 데이터 분석</span>
-                <span className="w-1.5 h-1.5 rounded-full bg-[#3182F6]" />
+                UTM
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setServiceMode("hall");
+                  writeUrlState({ mode: "hall" });
+                }}
+                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 ${
+                  serviceMode === "hall"
+                    ? "bg-white text-[#2563EB] shadow-sm font-bold"
+                    : "text-[#6B7684] hover:text-[#191F28]"
+                }`}
+              >
+                <Zap className="w-3 h-3 text-[#2563EB]" />
+                Hall
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setServiceMode("lfa");
+                  writeUrlState({ mode: "lfa" });
+                }}
+                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 ${
+                  serviceMode === "lfa"
+                    ? "bg-white text-[#D97706] shadow-sm font-bold"
+                    : "text-[#6B7684] hover:text-[#191F28]"
+                }`}
+              >
+                <Flame className="w-3 h-3 text-[#D97706]" />
+                LFA
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setServiceMode("integrated");
+                  writeUrlState({ mode: "integrated" });
+                }}
+                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 ${
+                  serviceMode === "integrated"
+                    ? "bg-white text-[#7C3AED] shadow-sm font-bold"
+                    : "text-[#6B7684] hover:text-[#191F28]"
+                }`}
+              >
+                <Share2 className="w-3 h-3 text-[#7C3AED]" />
+                통합 연계
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setServiceMode("literature");
+                  writeUrlState({ mode: "literature" });
+                }}
+                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 ${
+                  serviceMode === "literature"
+                    ? "bg-white text-[#0284C7] shadow-sm font-bold"
+                    : "text-[#6B7684] hover:text-[#191F28]"
+                }`}
+              >
+                <BookOpen className="w-3 h-3 text-[#0284C7]" />
+                문헌 RAG
               </button>
             </div>
 
@@ -738,6 +807,14 @@ export default function App() {
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-8 py-6 sm:py-8">
         {serviceMode === "utm" ? (
           <UtmView />
+        ) : serviceMode === "hall" ? (
+          <HallView />
+        ) : serviceMode === "lfa" ? (
+          <LfaView />
+        ) : serviceMode === "integrated" ? (
+          <IntegratedAnalysisView />
+        ) : serviceMode === "literature" ? (
+          <LiteratureEvidencePanel />
         ) : viewMode === "setup" || !activeProject ? (
           <LandingSetup
             health={health}

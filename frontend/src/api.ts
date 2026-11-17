@@ -265,4 +265,65 @@ export const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   }),
+
+  // MatLens 2.0 API v1
+  uploadAndDetectFile: async (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch("/api/v1/files/upload", {
+      method: "POST",
+      body: fd,
+    });
+    return handleJson<any>(r);
+  },
+
+  runHallAnalysis: async (payload: any) => {
+    const r = await fetch("/api/v1/analysis/hall", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  runLfaAnalysis: async (payload: any) => {
+    const r = await fetch("/api/v1/analysis/lfa", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  runIntegratedAnalysis: async (payload: any) => {
+    const r = await fetch("/api/v1/analysis/integrated", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  searchLiterature: async (payload: any) => {
+    const r = await fetch("/api/v1/literature/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  verifyDoi: async (doi: string) => {
+    const r = await fetch("/api/v1/literature/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doi }),
+    });
+    return handleJson<any>(r);
+  },
+
+  getApiV1Health: async () => {
+    const r = await fetch("/api/v1/health");
+    return handleJson<any>(r);
+  },
 };

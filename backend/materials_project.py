@@ -81,8 +81,14 @@ def configure_key(data_dir, key):
     path.parent.mkdir(parents=True, exist_ok=True)
     with KEY_LOCK:
         path.touch(mode=0o600, exist_ok=True)
-        set_key(str(path), 'MP_API_KEY', key)
-        set_key(str(path), 'MP_VERIFIED_AT', timestamp())
+        try:
+            set_key(str(path), 'MP_API_KEY', key)
+            set_key(str(path), 'MP_VERIFIED_AT', timestamp())
+        except PermissionError:
+            lines = [l for l in path.read_text(encoding='utf-8').splitlines() if not l.startswith(('MP_API_KEY=', 'MP_VERIFIED_AT='))] if path.exists() else []
+            lines.append(f"MP_API_KEY={key}")
+            lines.append(f"MP_VERIFIED_AT={timestamp()}")
+            path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
         if os.name != 'nt':
             path.chmod(0o600)
     return status(data_dir)

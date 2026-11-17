@@ -1,0 +1,28 @@
+# MatLens Research Prototype Synthetic Hall Benchmark (n-type Si)
+# Geometry: Van der Pauw
+# Applied Current: 10.0 mA
+# Specimen Thickness: 500 um
+# Sheet Resistance: 9.05 Ohm/sq
+# Ground Truth: n-type, Bulk n = 1.00e16 cm^-3, Sheet n_s = 5.00e14 cm^-2
+MagneticField_T,TransverseVoltage_mV
+-1.00,13.1342
+-0.90,11.8007
+-0.80,10.5404
+-0.70,9.2620
+-0.60,8.0025
+-0.50,6.7119
+-0.40,5.4370
+-0.30,4.2239
+-0.20,2.8909
+-0.10,1.7217
+-0.00,0.4659
+0.10,-0.8148
+0.20,-2.0361
+0.30,-3.3069
+0.40,-4.5520
+0.50,-5.7328
+0.60,-6.9909
+0.70,-8.1699
+0.80,-9.3814
+0.90,-10.6670
+1.00,-11.9039

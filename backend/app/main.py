@@ -55,6 +55,7 @@ from .engine.report_engine import (
 from .engine.sem_engine import compute_grain_phase_map, inspect_sem_bytes, load_sem_grayscale_and_rgb
 from .engine.xrd_engine import inspect_and_parse_xrd
 from .jobs import submit_analysis_job
+from .api_v1 import router as api_v1_router
 from .schemas import (
     CreateProjectRequest,
     ROIRect,
@@ -91,6 +92,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# MatLens 2.0 Scientific API v1 (Hall, LFA, RAG, Integrated Analysis)
+app.include_router(api_v1_router)
 
 
 # ---------------- Helper Serializers ---------------- #
@@ -1533,15 +1537,26 @@ def serve_index_with_ai_fallback(
 
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
-from app.core.utm_engine import (
-    parse_utm_raw_text,
-    analyze_utm_dataset,
-    detect_encoding,
-)
-from app.core.utm_pdf import (
-    generate_utm_charts_image,
-    generate_utm_pdf_report,
-)
+try:
+    from .core.utm_engine import (
+        parse_utm_raw_text,
+        analyze_utm_dataset,
+        detect_encoding,
+    )
+    from .core.utm_pdf import (
+        generate_utm_charts_image,
+        generate_utm_pdf_report,
+    )
+except ImportError:
+    from app.core.utm_engine import (
+        parse_utm_raw_text,
+        analyze_utm_dataset,
+        detect_encoding,
+    )
+    from app.core.utm_pdf import (
+        generate_utm_charts_image,
+        generate_utm_pdf_report,
+    )
 
 
 # ==========================================

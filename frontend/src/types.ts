@@ -287,3 +287,135 @@ export interface UTMAnalysisResult {
   curves: UTMCurves;
 }
 
+
+// ==========================================
+// MatLens 2.0: Hall, LFA, RAG & Integrated
+// ==========================================
+export interface HallAnalysisResult {
+  slope_dV_dB: number;
+  r_squared: number;
+  hall_coefficient_m3_C: number;
+  hall_coefficient_cm3_C: number;
+  carrier_type: string;
+  carrier_concentration_cm3: number;
+  carrier_concentration_m3: number;
+  sheet_carrier_density_cm2: number;
+  hall_mobility_cm2_Vs: number | null;
+  electrical_conductivity_S_cm: number | null;
+  resistivity_Ohm_cm: number | null;
+  sheet_resistance_Ohm_sq: number | null;
+  uncertainty_carrier_pct: number;
+  uncertainty_mobility_pct: number;
+  raw_b_field: number[];
+  raw_v_hall: number[];
+  antisym_b_field: number[];
+  antisym_v_hall: number[];
+  fitted_v_hall: number[];
+  longitudinal_offset_mV: number;
+  offset_ratio_pct: number;
+  warnings: string[];
+  notes: string[];
+}
+
+export interface LfaAnalysisResult {
+  half_rise_time_s: number;
+  thermal_diffusivity_mm2_s: number;
+  thermal_diffusivity_m2_s: number;
+  thickness_mm: number;
+  baseline_temp_C: number;
+  max_temp_rise_C: number;
+  thermal_conductivity_W_mK: number | null;
+  density_g_cm3: number | null;
+  specific_heat_J_gK: number | null;
+  is_literature_density: boolean;
+  is_literature_cp: boolean;
+  missing_inputs: string[];
+  time_series_s: number[];
+  temp_series_C: number[];
+  fitted_time_s: number[];
+  fitted_temp_C: number[];
+  heat_loss_ratio: number;
+  uncertainty_diffusivity_pct: number;
+  uncertainty_conductivity_pct: number;
+  warnings: string[];
+  notes: string[];
+}
+
+export interface LiteratureReference {
+  id: string;
+  doi: string;
+  title: string;
+  authors: string[];
+  journal: string;
+  year: number;
+  is_open_access?: boolean;
+  oa_url?: string;
+  relevance_score?: number;
+  category_code?: number;
+  category_label?: string;
+  evidence_location?: string;
+  key_claims?: string[];
+  is_verified_doi?: boolean;
+}
+
+export interface GroundedClaim {
+  claim_text: string;
+  category: "Measured Fact" | "Calculated Result" | "Literature-Supported" | "Hypothesis" | "Insufficient Evidence";
+  source_id?: string;
+  doi?: string;
+  evidence_location?: string;
+  confidence: "High" | "Moderate" | "Low";
+  limitation_note?: string;
+}
+
+export interface GroundingData {
+  pipeline_status: string;
+  pipeline_log: { step: number; name: string; status: string; details: any }[];
+  verified_references: LiteratureReference[];
+  grounded_claims: GroundedClaim[];
+  top_benchmark_paper?: LiteratureReference;
+}
+
+export interface ScientificInterpretation {
+  analysis_summary: string;
+  input_data_summary: string;
+  data_quality_assessment: string;
+  calculated_properties: string;
+  graph_interpretation: string;
+  composition_processing_interpretation: string;
+  literature_comparison: string;
+  mechanism_discussion: string;
+  alternative_explanations: string;
+  limitations_and_uncertainty: string;
+  suggested_additional_experiments: string[];
+  references: { id: string; doi: string; title: string; verified: boolean }[];
+  ai_engine?: string;
+}
+
+export interface WiedemannFranzResult {
+  temperature_K: number;
+  lorenz_number_W_Ohm_K2: number;
+  is_sommerfeld_limit: boolean;
+  total_thermal_conductivity_W_mK: number;
+  electronic_thermal_conductivity_W_mK: number;
+  lattice_thermal_conductivity_W_mK: number;
+  electronic_fraction_pct: number;
+  lattice_fraction_pct: number;
+  dominant_mechanism: string;
+  warnings: string[];
+}
+
+export interface IntegratedAnalysisResult {
+  sample_id: string;
+  material_name: string;
+  instruments_included: string[];
+  wiedemann_franz: WiedemannFranzResult | null;
+  xrd_sem_correlation: any | null;
+  sem_hall_correlation: any | null;
+  sem_lfa_correlation: any | null;
+  xrd_hall_correlation: any | null;
+  synthesis_to_properties_chain: { stage: string; description: string; data_source: string }[];
+  grounded_claims: GroundedClaim[];
+  warnings: string[];
+  notes: string[];
+}
