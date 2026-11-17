@@ -364,4 +364,63 @@ export const api = {
     a.remove();
     window.URL.revokeObjectURL(url);
   },
+
+  // Multi-Specimen Experimental Question Comparison & Cross-Instrument API
+  seedComparisonSeries: async (forceReseed = false) => {
+    const r = await fetch("/api/v1/comparison/seed-series", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force_reseed: forceReseed }),
+    });
+    return handleJson<any>(r);
+  },
+
+  evaluateComparisonCandidates: async (payload: {
+    question_type: string;
+    baseline_project_id?: string | null;
+    auto_seed_if_empty?: boolean;
+  }) => {
+    const r = await fetch("/api/v1/comparison/candidates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  analyzeComparison: async (payload: {
+    session_id?: string | null;
+    question_type: string;
+    baseline_project_id?: string | null;
+    slots: Array<{
+      project_id: string;
+      xrd_run_id?: string | null;
+      sem_file_id?: string | null;
+      sem_run_id?: string | null;
+    }>;
+    norm_mode?: "max_100" | "raw";
+    offset_step?: number;
+    report_title?: string | null;
+  }) => {
+    const r = await fetch("/api/v1/comparison/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  getComparisonSession: async (sessionId: string) => {
+    const r = await fetch(`/api/v1/comparison/sessions/${encodeURIComponent(sessionId)}`);
+    return handleJson<any>(r);
+  },
+
+  comparisonXrdPngUrl: (sessionId: string) =>
+    `/api/v1/comparison/sessions/${encodeURIComponent(sessionId)}/export/xrd-chart.png`,
+  comparisonPeaksCsvUrl: (sessionId: string) =>
+    `/api/v1/comparison/sessions/${encodeURIComponent(sessionId)}/export/xrd-peaks.csv`,
+  comparisonJsonUrl: (sessionId: string) =>
+    `/api/v1/comparison/sessions/${encodeURIComponent(sessionId)}/export/result.json`,
+  comparisonPdfUrl: (sessionId: string) =>
+    `/api/v1/comparison/sessions/${encodeURIComponent(sessionId)}/export/report.pdf`,
 };

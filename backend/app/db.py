@@ -107,6 +107,16 @@ def init_db() -> None:
                 error_message TEXT,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS comparison_sessions (
+                id TEXT PRIMARY KEY,
+                question_type TEXT NOT NULL DEFAULT 'process_variation',
+                baseline_project_id TEXT,
+                slots_json TEXT NOT NULL DEFAULT '[]',
+                options_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
 

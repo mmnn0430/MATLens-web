@@ -54,6 +54,7 @@ from .engine.report_engine import (
 )
 from .engine.sem_engine import compute_grain_phase_map, inspect_sem_bytes, load_sem_grayscale_and_rgb
 from .engine.xrd_engine import inspect_and_parse_xrd
+from .engine.comparison_engine import infer_or_extract_experiment_meta
 from .jobs import submit_analysis_job
 from .api_v1 import router as api_v1_router
 from .schemas import (
@@ -140,7 +141,7 @@ def _serialize_project(project_id: str) -> dict[str, Any]:
             }
         )
 
-    return {
+    proj_dict = {
         "id": proj["id"],
         "sample_name": proj["sample_name"],
         "description": proj["description"],
@@ -157,6 +158,8 @@ def _serialize_project(project_id: str) -> dict[str, Any]:
         "created_at": proj["created_at"],
         "updated_at": proj["updated_at"],
     }
+    proj_dict["experiment_meta"] = infer_or_extract_experiment_meta(proj_dict)
+    return proj_dict
 
 
 def _serialize_run(run_id: str) -> dict[str, Any]:
@@ -340,6 +343,16 @@ def list_projects() -> list[dict[str, Any]]:
                 fr["file_role"]
                 for fr in conn.execute("SELECT file_role FROM project_files WHERE project_id = ?", (p["id"],)).fetchall()
             ]
+            p_raw = {
+                "id": p["id"],
+                "sample_name": p["sample_name"],
+                "description": p["description"],
+                "expected_formula": p["expected_formula"],
+                "expected_elements": json.loads(p["expected_elements_json"]),
+                "is_same_sample": bool(p["is_same_sample"]),
+                "is_sample_demo": bool(p["is_sample_demo"]),
+                "current_conditions": json.loads(p["current_conditions_json"]),
+            }
             out.append(
                 {
                     "id": p["id"],
@@ -349,6 +362,7 @@ def list_projects() -> list[dict[str, Any]]:
                     "expected_elements": json.loads(p["expected_elements_json"]),
                     "is_same_sample": bool(p["is_same_sample"]),
                     "is_sample_demo": bool(p["is_sample_demo"]),
+                    "experiment_meta": infer_or_extract_experiment_meta(p_raw),
                     "file_roles": sorted(set(file_roles)),
                     "run_count": run_cnt,
                     "updated_at": p["updated_at"],
@@ -361,7 +375,12 @@ def list_projects() -> list[dict[str, Any]]:
 def create_project(req: CreateProjectRequest) -> dict[str, Any]:
     pid = new_id("proj")
     now = utc_now_iso()
-    default_cond = {"xrd_params": XRDParams().model_dump(), "sem_params": SEMParams().model_dump()}
+    default_cond: dict[str, Any] = {
+        "xrd_params": XRDParams().model_dump(),
+        "sem_params": SEMParams().model_dump(),
+    }
+    if req.experiment_meta is not None:
+        default_cond["experiment_meta"] = req.experiment_meta.model_dump()
     clean_elems = [e.strip() for e in req.expected_elements if e.strip()]
     with get_conn() as conn:
         conn.execute(
@@ -409,7 +428,10 @@ def update_project(project_id: str, req: UpdateProjectRequest) -> dict[str, Any]
         )
         formula = req.expected_formula.strip() if req.expected_formula is not None else proj["expected_formula"]
         is_same = int(req.is_same_sample) if req.is_same_sample is not None else proj["is_same_sample"]
-        cond = req.current_conditions if req.current_conditions is not None else json.loads(proj["current_conditions_json"])
+        existing_cond = json.loads(proj["current_conditions_json"])
+        cond = req.current_conditions if req.current_conditions is not None else existing_cond
+        if req.experiment_meta is not None:
+            cond["experiment_meta"] = req.experiment_meta.model_dump()
         now = utc_now_iso()
 
         conn.execute(
@@ -450,6 +472,10 @@ def _attach_file_bytes_to_project(
     filename: str,
     raw_bytes: bytes,
     is_sample: bool = False,
+    replace_existing: bool = False,
+    fov_label: str | None = None,
+    imaging_mode: str = "SE",
+    magnification: str = "",
 ) -> dict[str, Any]:
     if len(raw_bytes) == 0:
         raise HTTPException(status_code=400, detail="비어 있는 파일입니다.")
@@ -496,17 +522,37 @@ def _attach_file_bytes_to_project(
 
     now = utc_now_iso()
     with get_conn() as conn:
-        if file_role in ("xrd", "sem"):
-            # Replace previous active XRD or SEM file while preserving disk audit only if needed; clean old one
-            old_rows = conn.execute(
-                "SELECT id, stored_relpath FROM project_files WHERE project_id = ? AND file_role = ?",
-                (project_id, file_role),
-            ).fetchall()
-            for old in old_rows:
+        existing_same_role = conn.execute(
+            "SELECT id, stored_relpath, original_filename, sha256 FROM project_files WHERE project_id = ? AND file_role = ?",
+            (project_id, file_role),
+        ).fetchall()
+
+        if replace_existing and file_role in ("xrd", "sem"):
+            for old in existing_same_role:
                 old_p = PROJECTS_STORAGE_DIR / project_id / old["stored_relpath"]
                 if old_p.exists():
                     old_p.unlink(missing_ok=True)
                 conn.execute("DELETE FROM project_files WHERE id = ?", (old["id"],))
+            existing_same_role = []
+        else:
+            # Remove only exact duplicate (same filename and sha256), preserving multiple FOVs (A1, A2) or repeat scans!
+            kept = []
+            for old in existing_same_role:
+                if old["original_filename"] == Path(filename).name and old["sha256"] == sha256:
+                    old_p = PROJECTS_STORAGE_DIR / project_id / old["stored_relpath"]
+                    if old_p.exists():
+                        old_p.unlink(missing_ok=True)
+                    conn.execute("DELETE FROM project_files WHERE id = ?", (old["id"],))
+                else:
+                    kept.append(old)
+            existing_same_role = kept
+
+        if file_role == "sem":
+            fov_num = len(existing_same_role) + 1
+            inspection["fov_label"] = (fov_label or "").strip() or f"시야 #{fov_num} ({Path(filename).name})"
+            inspection["imaging_mode"] = (imaging_mode or "SE").strip().upper()
+            if magnification:
+                inspection["magnification"] = magnification.strip()
 
         conn.execute(
             """
@@ -734,14 +780,48 @@ def upload_project_file_from_desktop(
 
 # ---------------- File Upload & Raw Image Serving ---------------- #
 @app.post("/api/projects/{project_id}/files/{file_role}")
-async def upload_project_file(project_id: str, file_role: str, file: UploadFile = File(...)) -> dict[str, Any]:
+async def upload_project_file(
+    project_id: str,
+    file_role: str,
+    file: UploadFile = File(...),
+    replace_existing: bool = Query(default=False),
+    fov_label: str | None = Query(default=None),
+    imaging_mode: str = Query(default="SE"),
+    magnification: str = Query(default=""),
+) -> dict[str, Any]:
     with get_conn() as conn:
         exists = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다.")
 
     raw_bytes = await file.read()
-    _attach_file_bytes_to_project(project_id, file_role.lower(), file.filename or f"upload.{file_role}", raw_bytes, is_sample=False)
+    _attach_file_bytes_to_project(
+        project_id,
+        file_role.lower(),
+        file.filename or f"upload.{file_role}",
+        raw_bytes,
+        is_sample=False,
+        replace_existing=replace_existing,
+        fov_label=fov_label,
+        imaging_mode=imaging_mode,
+        magnification=magnification,
+    )
+    return _serialize_project(project_id)
+
+
+@app.delete("/api/projects/{project_id}/files/{file_id}")
+def delete_project_file(project_id: str, file_id: str) -> dict[str, Any]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, stored_relpath, original_filename FROM project_files WHERE id = ? AND project_id = ?",
+            (file_id, project_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="삭제할 파일을 찾을 수 없습니다.")
+        full_p = PROJECTS_STORAGE_DIR / project_id / row["stored_relpath"]
+        if full_p.exists():
+            full_p.unlink(missing_ok=True)
+        conn.execute("DELETE FROM project_files WHERE id = ?", (file_id,))
     return _serialize_project(project_id)
 
 

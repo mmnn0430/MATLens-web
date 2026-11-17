@@ -21,6 +21,19 @@ from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 
 try:
+    from .db import get_conn, new_id, utc_now_iso
+    from .engine.comparison_engine import (
+        QUESTION_DEFINITIONS,
+        build_full_comparison_report_data,
+        evaluate_all_candidates_for_question,
+        infer_or_extract_experiment_meta,
+    )
+    from .engine.comparison_seeder_and_export import (
+        ensure_verification_series_seeded,
+        generate_comparison_pdf_report,
+        generate_comparison_peaks_csv,
+        generate_comparison_stacked_xrd_png,
+    )
     from .engine.hall_engine import (
         analyze_hall_data,
         parse_hall_data,
@@ -47,6 +60,19 @@ try:
         verify_crossref_doi,
     )
 except ImportError:
+    from backend.app.db import get_conn, new_id, utc_now_iso
+    from backend.app.engine.comparison_engine import (
+        QUESTION_DEFINITIONS,
+        build_full_comparison_report_data,
+        evaluate_all_candidates_for_question,
+        infer_or_extract_experiment_meta,
+    )
+    from backend.app.engine.comparison_seeder_and_export import (
+        ensure_verification_series_seeded,
+        generate_comparison_pdf_report,
+        generate_comparison_peaks_csv,
+        generate_comparison_stacked_xrd_png,
+    )
     from backend.app.engine.hall_engine import (
         analyze_hall_data,
         parse_hall_data,
@@ -498,3 +524,354 @@ def export_scientific_pdf_endpoint(req: PdfReportRequest):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="MatLens2_Report_{safe_name}.pdf"'},
     )
+
+
+# -------------------------------------------------------------------------
+# Multi-Specimen Experimental Question Comparison & Cross-Instrument API
+# -------------------------------------------------------------------------
+class ComparisonSeedRequest(BaseModel):
+    force_reseed: bool = False
+
+
+class ComparisonCandidatesRequest(BaseModel):
+    question_type: str = "process_variation"
+    baseline_project_id: Optional[str] = None
+    auto_seed_if_empty: bool = True
+
+
+class ComparisonSlotRequest(BaseModel):
+    project_id: str
+    xrd_run_id: Optional[str] = None
+    sem_file_id: Optional[str] = None
+    sem_run_id: Optional[str] = None
+
+
+class ComparisonAnalyzeRequest(BaseModel):
+    session_id: Optional[str] = None
+    question_type: str = "process_variation"
+    baseline_project_id: Optional[str] = None
+    slots: List[ComparisonSlotRequest] = Field(default_factory=list)
+    norm_mode: str = "max_100"
+    offset_step: float = 115.0
+    report_title: Optional[str] = None
+
+
+def _load_all_projects_and_runs_from_db() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Load all projects, their files, and their completed/queued runs from SQLite."""
+    projects_by_id: dict[str, dict[str, Any]] = {}
+    runs_by_id: dict[str, dict[str, Any]] = {}
+
+    with get_conn() as conn:
+        prows = conn.execute("SELECT * FROM projects ORDER BY created_at ASC").fetchall()
+        frows = conn.execute("SELECT * FROM project_files ORDER BY created_at ASC").fetchall()
+        rrows = conn.execute("SELECT * FROM analysis_runs ORDER BY run_number DESC").fetchall()
+
+    files_by_proj: dict[str, list[dict[str, Any]]] = {}
+    for f in frows:
+        files_by_proj.setdefault(f["project_id"], []).append(
+            {
+                "id": f["id"],
+                "file_role": f["file_role"],
+                "original_filename": f["original_filename"],
+                "stored_relpath": f["stored_relpath"],
+                "sha256": f["sha256"],
+                "size_bytes": f["size_bytes"],
+                "is_sample": bool(f["is_sample"]),
+                "inspection": json.loads(f["inspection_json"]) if f["inspection_json"] else {},
+                "created_at": f["created_at"],
+            }
+        )
+
+    runs_brief_by_proj: dict[str, list[dict[str, Any]]] = {}
+    for r in rrows:
+        rid = r["id"]
+        runs_by_id[rid] = {
+            "id": rid,
+            "project_id": r["project_id"],
+            "run_number": r["run_number"],
+            "status": r["status"],
+            "params": json.loads(r["params_json"]) if r["params_json"] else {},
+            "file_hashes": json.loads(r["file_hashes_json"]) if r["file_hashes_json"] else {},
+            "xrd_result": json.loads(r["xrd_result_json"]) if r["xrd_result_json"] else None,
+            "sem_result": json.loads(r["sem_result_json"]) if r["sem_result_json"] else None,
+            "rule_summary": json.loads(r["rule_summary_json"]) if r["rule_summary_json"] else None,
+            "has_overlay": bool(r["overlay_relpath"]),
+            "has_roi_image": bool(r["roi_relpath"]),
+            "created_at": r["created_at"],
+            "completed_at": r["completed_at"],
+        }
+        runs_brief_by_proj.setdefault(r["project_id"], []).append(
+            {
+                "id": rid,
+                "run_number": r["run_number"],
+                "status": r["status"],
+                "created_at": r["created_at"],
+                "completed_at": r["completed_at"],
+            }
+        )
+
+    for p in prows:
+        pid = p["id"]
+        p_dict = {
+            "id": pid,
+            "sample_name": p["sample_name"],
+            "description": p["description"],
+            "expected_elements": json.loads(p["expected_elements_json"]) if p["expected_elements_json"] else [],
+            "expected_formula": p["expected_formula"],
+            "is_same_sample": bool(p["is_same_sample"]),
+            "is_sample_demo": bool(p["is_sample_demo"]),
+            "current_conditions": json.loads(p["current_conditions_json"]) if p["current_conditions_json"] else {},
+            "files": files_by_proj.get(pid, []),
+            "runs": runs_brief_by_proj.get(pid, []),
+            "created_at": p["created_at"],
+            "updated_at": p["updated_at"],
+        }
+        p_dict["experiment_meta"] = infer_or_extract_experiment_meta(p_dict)
+        projects_by_id[pid] = p_dict
+
+    return projects_by_id, runs_by_id
+
+
+@router.get("/comparison/questions")
+def get_comparison_questions():
+    """Return the three experimental questions and their grouping criteria."""
+    return {"questions": list(QUESTION_DEFINITIONS.values())}
+
+
+@router.post("/comparison/seed-series")
+def seed_verification_series_endpoint(req: ComparisonSeedRequest):
+    """Seed the multi-specimen verification series into the database."""
+    return ensure_verification_series_seeded(force_reseed=req.force_reseed)
+
+
+@router.post("/comparison/candidates")
+def evaluate_comparison_candidates_endpoint(req: ComparisonCandidatesRequest):
+    """Evaluate all workspace projects for a selected experimental question."""
+    projects_by_id, _ = _load_all_projects_and_runs_from_db()
+    has_series = any(p["sample_name"].startswith("[검증시리즈]") for p in projects_by_id.values())
+    if not has_series and req.auto_seed_if_empty:
+        ensure_verification_series_seeded(force_reseed=False)
+        projects_by_id, _ = _load_all_projects_and_runs_from_db()
+
+    q_type = req.question_type if req.question_type in QUESTION_DEFINITIONS else "process_variation"
+    return evaluate_all_candidates_for_question(
+        list(projects_by_id.values()),
+        q_type,  # type: ignore[arg-type]
+        req.baseline_project_id,
+    )
+
+
+def _save_and_compute_session(req: ComparisonAnalyzeRequest) -> dict[str, Any]:
+    projects_by_id, runs_by_id = _load_all_projects_and_runs_from_db()
+    has_series = any(p["sample_name"].startswith("[검증시리즈]") for p in projects_by_id.values())
+    if not has_series:
+        ensure_verification_series_seeded(force_reseed=False)
+        projects_by_id, runs_by_id = _load_all_projects_and_runs_from_db()
+
+    q_type = req.question_type if req.question_type in QUESTION_DEFINITIONS else "process_variation"
+    cand_eval = evaluate_all_candidates_for_question(
+        list(projects_by_id.values()),
+        q_type,  # type: ignore[arg-type]
+        req.baseline_project_id,
+    )
+
+    if req.slots:
+        req_slots_dicts = [s.model_dump() for s in req.slots]
+    else:
+        req_slots_dicts = [{"project_id": pid} for pid in cand_eval.get("recommended_project_ids", [])]
+
+    norm_m = "raw" if req.norm_mode == "raw" else "max_100"
+    comp_data = build_full_comparison_report_data(
+        question_type=q_type,  # type: ignore[arg-type]
+        baseline_project_id=cand_eval.get("baseline_project_id"),
+        requested_slots=req_slots_dicts,
+        projects_by_id=projects_by_id,
+        runs_by_id=runs_by_id,
+        norm_mode=norm_m,  # type: ignore[arg-type]
+        offset_step=req.offset_step,
+    )
+
+    # Persist exact resolved slot bindings (including sem_file_id and xrd_run_id) into SQLite session
+    persisted_slots = [
+        {
+            "project_id": sl["project_id"],
+            "xrd_run_id": sl["selected_xrd"]["run_id"] if sl.get("selected_xrd") else None,
+            "sem_file_id": sl["selected_sem"]["file_id"] if sl.get("selected_sem") else None,
+            "sem_run_id": sl["selected_sem"]["run_id"] if sl.get("selected_sem") else None,
+        }
+        for sl in comp_data.get("slots", [])
+    ]
+
+    sid = req.session_id or new_id("comp")
+    now = utc_now_iso()
+    r_title = req.report_title or cand_eval.get("report_title")
+    options_obj = {
+        "norm_mode": norm_m,
+        "offset_step": req.offset_step,
+        "report_title": r_title,
+    }
+
+    with get_conn() as conn:
+        exists = conn.execute("SELECT id FROM comparison_sessions WHERE id = ?", (sid,)).fetchone()
+        if exists:
+            conn.execute(
+                """
+                UPDATE comparison_sessions
+                SET question_type = ?, baseline_project_id = ?, slots_json = ?, options_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    q_type,
+                    cand_eval.get("baseline_project_id"),
+                    json.dumps(persisted_slots, ensure_ascii=False),
+                    json.dumps(options_obj, ensure_ascii=False),
+                    now,
+                    sid,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO comparison_sessions (id, question_type, baseline_project_id, slots_json, options_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sid,
+                    q_type,
+                    cand_eval.get("baseline_project_id"),
+                    json.dumps(persisted_slots, ensure_ascii=False),
+                    json.dumps(options_obj, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+
+    return {
+        "session_id": sid,
+        "question_type": q_type,
+        "report_title": r_title,
+        "candidate_evaluation": cand_eval,
+        **comp_data,
+    }
+
+
+def _load_session_and_compute(session_id: str) -> dict[str, Any]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM comparison_sessions WHERE id = ?", (session_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"비교 분석 세션('{session_id}')을 찾을 수 없습니다.")
+
+    slots_list = json.loads(row["slots_json"]) if row["slots_json"] else []
+    opts = json.loads(row["options_json"]) if row["options_json"] else {}
+
+    req = ComparisonAnalyzeRequest(
+        session_id=row["id"],
+        question_type=row["question_type"],
+        baseline_project_id=row["baseline_project_id"],
+        slots=[ComparisonSlotRequest(**s) for s in slots_list],
+        norm_mode=opts.get("norm_mode", "max_100"),
+        offset_step=float(opts.get("offset_step", 115.0)),
+        report_title=opts.get("report_title"),
+    )
+    return _save_and_compute_session(req)
+
+
+@router.post("/comparison/analyze")
+def analyze_comparison_endpoint(req: ComparisonAnalyzeRequest):
+    """Execute multi-specimen comparison analysis and save session state."""
+    return _save_and_compute_session(req)
+
+
+@router.get("/comparison/sessions/{session_id}")
+def get_comparison_session_endpoint(session_id: str):
+    """Reload a saved comparison session (preserving specimen order and selected SEM FOVs across refresh)."""
+    return _load_session_and_compute(session_id)
+
+
+@router.post("/comparison/export/xrd-chart.png")
+def export_comparison_xrd_png_post(req: ComparisonAnalyzeRequest):
+    comp_res = _save_and_compute_session(req)
+    png_bytes = generate_comparison_stacked_xrd_png(comp_res, dpi=300)
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Content-Disposition": f'attachment; filename="MatLens_Comparison_{comp_res["session_id"]}_xrd.png"'},
+    )
+
+
+@router.get("/comparison/sessions/{session_id}/export/xrd-chart.png")
+def export_comparison_xrd_png_get(session_id: str):
+    comp_res = _load_session_and_compute(session_id)
+    png_bytes = generate_comparison_stacked_xrd_png(comp_res, dpi=300)
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Content-Disposition": f'attachment; filename="MatLens_Comparison_{session_id}_xrd.png"'},
+    )
+
+
+@router.post("/comparison/export/xrd-peaks.csv")
+def export_comparison_peaks_csv_post(req: ComparisonAnalyzeRequest):
+    comp_res = _save_and_compute_session(req)
+    csv_bytes = generate_comparison_peaks_csv(comp_res)
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="MatLens_Comparison_{comp_res["session_id"]}_peaks.csv"'},
+    )
+
+
+@router.get("/comparison/sessions/{session_id}/export/xrd-peaks.csv")
+def export_comparison_peaks_csv_get(session_id: str):
+    comp_res = _load_session_and_compute(session_id)
+    csv_bytes = generate_comparison_peaks_csv(comp_res)
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="MatLens_Comparison_{session_id}_peaks.csv"'},
+    )
+
+
+@router.post("/comparison/export/result.json")
+def export_comparison_json_post(req: ComparisonAnalyzeRequest):
+    comp_res = _save_and_compute_session(req)
+    raw = json.dumps(comp_res, ensure_ascii=False, indent=2).encode("utf-8")
+    return Response(
+        content=raw,
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="MatLens_Comparison_{comp_res["session_id"]}_result.json"'},
+    )
+
+
+@router.get("/comparison/sessions/{session_id}/export/result.json")
+def export_comparison_json_get(session_id: str):
+    comp_res = _load_session_and_compute(session_id)
+    raw = json.dumps(comp_res, ensure_ascii=False, indent=2).encode("utf-8")
+    return Response(
+        content=raw,
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="MatLens_Comparison_{session_id}_result.json"'},
+    )
+
+
+@router.post("/comparison/export/report.pdf")
+def export_comparison_pdf_post(req: ComparisonAnalyzeRequest):
+    comp_res = _save_and_compute_session(req)
+    pdf_bytes = generate_comparison_pdf_report(comp_res, report_title=comp_res.get("report_title"))
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="MatLens_Comparison_{comp_res["session_id"]}_report.pdf"'},
+    )
+
+
+@router.get("/comparison/sessions/{session_id}/export/report.pdf")
+def export_comparison_pdf_get(session_id: str):
+    comp_res = _load_session_and_compute(session_id)
+    pdf_bytes = generate_comparison_pdf_report(comp_res, report_title=comp_res.get("report_title"))
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="MatLens_Comparison_{session_id}_report.pdf"'},
+    )
+

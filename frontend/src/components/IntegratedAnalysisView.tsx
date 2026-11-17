@@ -1,13 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
-  BookOpen,
+  AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
   CheckCircle2,
-  Cpu,
   Download,
-  ExternalLink,
+  Edit3,
+  FileSpreadsheet,
+  FileText,
   Flame,
-  Layers,
+  Image as ImageIcon,
+  Link2,
   Loader2,
   Maximize2,
   MessageSquare,
@@ -15,18 +19,19 @@ import {
   RefreshCw,
   Send,
   Share2,
-  ShieldCheck,
   Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
 import { api } from "../api";
 import { PlotlyChart } from "./PlotlyChart";
 import type {
+  ComparisonQuestionType,
+  ExperimentMeta,
   IntegratedAnalysisResult,
   LiteratureReference,
   ProjectDetail,
   RunDetail,
-  ScientificInterpretation,
 } from "../types";
 
 interface IntegratedAnalysisViewProps {
@@ -34,50 +39,135 @@ interface IntegratedAnalysisViewProps {
   activeRun?: RunDetail | null;
 }
 
-export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedAnalysisViewProps) {
-  // Sample & Environmental Metadata
-  const [sampleId, setSampleId] = useState<string>("NbFeSb-SPS-01");
-  const [materialName, setMaterialName] = useState<string>("NbFeSb half-Heusler");
-  const [chemicalFormula, setChemicalFormula] = useState<string>("NbFeSb");
-  const [dopant, setDopant] = useState<string>("Ti (5 at%)");
-  const [tempK, setTempK] = useState<number>(300);
+const QUESTION_CARDS: Array<{
+  id: ComparisonQuestionType;
+  title: string;
+  criteria: string;
+  displayFocus: string;
+  badge: string;
+}> = [
+  {
+    id: "process_variation",
+    title: "같은 조성에서 공정이 바뀌면 무엇이 달라지는가?",
+    criteria: "명목 조성·도펀트·함량이 같은 시편에서 열처리 온도, 유지 시간, 분위기 등 선택한 공정 변수를 비교",
+    displayFocus: "각 시편의 공정값과 함께 달라진 조건 및 복수 변수 동시 변경(교란) 경고",
+    badge: "실험 질문 1 · 공정 변수 비교",
+  },
+  {
+    id: "dopant_type",
+    title: "같은 모재에서 도펀트 종류가 바뀌면 무엇이 달라지는가?",
+    criteria: "같은 모재와 가능한 한 같은 공정·동등한 함량 기준에서 도펀트 종류를 비교 (무도핑 대조군 포함)",
+    displayFocus: "모재, 도펀트 종류, 함량과 단위, 무도핑 대조군 포함 여부",
+    badge: "실험 질문 2 · 도펀트 종류 비교",
+  },
+  {
+    id: "dopant_amount",
+    title: "같은 모재에서 함량이 바뀌면 무엇이 달라지는가?",
+    criteria: "같은 모재·도펀트(또는 첨가 성분)·공정에서 함량별 시편을 구성",
+    displayFocus: "함량 오름차순의 변화 추세, 단위 호환성 검증 및 반복 시편 간 편차",
+    badge: "실험 질문 3 · 도펀트 함량 시리즈",
+  },
+];
 
-  // Technique dataset switches & inputs
-  const [hasXrd, setHasXrd] = useState<boolean>(true);
-  const [crystalliteNm, setCrystalliteNm] = useState<number>(42.5);
-  const [spaceGroup, setSpaceGroup] = useState<string>("F-43m");
+function readSessionIdFromUrl(): string | null {
+  const sp = new URLSearchParams(window.location.search);
+  return sp.get("session") || localStorage.getItem("matlens_active_comparison_session_id");
+}
 
-  const [hasSem, setHasSem] = useState<boolean>(true);
-  const [grainSizeUm, setGrainSizeUm] = useState<number>(2.4);
-  const [porosityPct, setPorosityPct] = useState<number>(1.2);
+function writeSessionIdToUrl(sessionId: string | null) {
+  if (!sessionId) return;
+  try {
+    localStorage.setItem("matlens_active_comparison_session_id", sessionId);
+    const sp = new URLSearchParams(window.location.search);
+    sp.set("mode", "integrated");
+    sp.set("session", sessionId);
+    window.history.replaceState(null, "", `?${sp.toString()}`);
+  } catch {
+    // ignore URL history error
+  }
+}
 
-  const [hasHall, setHasHall] = useState<boolean>(true);
-  const [carrierConc, setCarrierConc] = useState<number>(4.2e20);
-  const [hallMobility, setHallMobility] = useState<number>(22.0);
-  const [elecCond, setElecCond] = useState<number>(1500.0);
-  const [carrierType, setCarrierType] = useState<string>("p-type (Hole)");
+export function IntegratedAnalysisView({ activeProject, activeRun: _activeRun }: IntegratedAnalysisViewProps) {
+  // =========================================================================
+  // 1. Multi-Specimen Comparison & XRD-SEM Cross-Analysis State
+  // =========================================================================
+  const [questionType, setQuestionType] = useState<ComparisonQuestionType>("process_variation");
+  const [baselineProjectId, setBaselineProjectId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(() => readSessionIdFromUrl());
+  const [normMode, setNormMode] = useState<"max_100" | "raw">("max_100");
+  const [offsetStep, setOffsetStep] = useState<number>(115);
+  const [showRawAndBgOverlay, setShowRawAndBgOverlay] = useState<boolean>(false);
+  const [twoThetaZoomWindow, setTwoThetaZoomWindow] = useState<[number, number] | null>(null);
 
-  const [hasLfa, setHasLfa] = useState<boolean>(true);
-  const [thermalDiff, setThermalDiff] = useState<number>(2.1);
-  const [thermalCond, setThermalCond] = useState<number>(4.8);
-  const [densityGcm3, setDensityGcm3] = useState<number>(8.25);
-  const [cpJgK, setCpJgK] = useState<number>(0.28);
+  const [compLoading, setCompLoading] = useState<boolean>(false);
+  const [compData, setCompData] = useState<any | null>(null);
+  const [selectedPeakUid, setSelectedPeakUid] = useState<string | null>(null);
+  const [highlightedSlotId, setHighlightedSlotId] = useState<string | null>(null);
+  const [semViewModeBySlot, setSemViewModeBySlot] = useState<Record<string, "raw" | "overlay">>({});
+  const [semLoadErrorByFile, setSemLoadErrorByFile] = useState<Record<string, boolean>>({});
+  const [semZoomModal, setSemZoomModal] = useState<{
+    url: string;
+    sampleName: string;
+    fovLabel: string;
+    filename: string;
+    scaleSummary: string;
+  } | null>(null);
 
-  const [hasUtm] = useState<boolean>(false);
-  const [youngsModulus] = useState<number>(180);
+  // Inline Metadata Editor State (for supplementing missing/unconfirmed specimen metadata)
+  const [editingMetaProjectId, setEditingMetaProjectId] = useState<string | null>(null);
+  const [editingSampleName, setEditingSampleName] = useState<string>("");
+  const [editingMetaForm, setEditingMetaForm] = useState<ExperimentMeta>({
+    base_matrix: "",
+    nominal_composition: "",
+    dopant_element: "",
+    dopant_amount: null,
+    dopant_unit: "at%",
+    process_temp_c: null,
+    process_time_h: null,
+    atmosphere: "Air",
+    process_method: "하소(Calcination)",
+    replicate_id: "",
+  });
+  const [savingMeta, setSavingMeta] = useState<boolean>(false);
 
-  // Results State
-  const [loading, setLoading] = useState<boolean>(false);
+  // Section refs for clickable evidence links
+  const xrdSectionRef = useRef<HTMLDivElement | null>(null);
+  const semSectionRef = useRef<HTMLDivElement | null>(null);
+
+  // =========================================================================
+  // 2. Transport (Hall / LFA) & Literature RAG / Research Assistant State
+  // =========================================================================
+  const [showTransportSection, setShowTransportSection] = useState<boolean>(false);
+  const [sampleId] = useState<string>("NbFeSb-SPS-01");
+  const [materialName] = useState<string>("NbFeSb half-Heusler");
+  const [chemicalFormula] = useState<string>("NbFeSb");
+  const [dopant] = useState<string>("Ti (5 at%)");
+  const [tempK] = useState<number>(300);
+
+  const [hasXrd] = useState<boolean>(true);
+  const [crystalliteNm] = useState<number>(42.5);
+  const [spaceGroup] = useState<string>("F-43m");
+
+  const [hasSem] = useState<boolean>(true);
+  const [grainSizeUm] = useState<number>(2.4);
+  const [porosityPct] = useState<number>(1.2);
+
+  const [hasHall] = useState<boolean>(true);
+  const [carrierConc] = useState<number>(4.2e20);
+  const [hallMobility] = useState<number>(22.0);
+  const [elecCond] = useState<number>(1500.0);
+  const [carrierType] = useState<string>("p-type (Hole)");
+
+  const [hasLfa] = useState<boolean>(true);
+  const [thermalDiff] = useState<number>(2.1);
+  const [thermalCond] = useState<number>(4.8);
+  const [densityGcm3] = useState<number>(8.25);
+  const [cpJgK] = useState<number>(0.28);
+
   const [result, setResult] = useState<IntegratedAnalysisResult | null>(null);
-  const [aiReport, setAiReport] = useState<ScientificInterpretation | null>(null);
-  const [pdfDownloading, setPdfDownloading] = useState<boolean>(false);
-
-  // Literature RAG State
   const [litLoading, setLitLoading] = useState<boolean>(false);
   const [references, setReferences] = useState<LiteratureReference[]>([]);
-  const [searchInstrument] = useState<string>("Hall + LFA");
 
-  // Interactive Research Assistant Q&A State
   const [qaInput, setQaInput] = useState<string>("");
   const [qaLoading, setQaLoading] = useState<boolean>(false);
   const [qaHistory, setQaHistory] = useState<
@@ -85,202 +175,386 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
   >([
     {
       sender: "ai",
-      text: "안녕하세요! MatLens 2.0 대화형 연구 어시스턴트입니다. 업로드하신 시료의 정량 계산 결과(Hall 캐리어 농도, LFA 열확산도, XRD 결정자, SEM 입경) 및 Wiedemann-Franz 법칙 전자/격자 열전도 분리 메커니즘, 피어 리뷰 학술 논문 근거에 대해 무엇이든 질문해 주세요.",
+      text: "안녕하세요! MatLens 대화형 연구 어시스턴트입니다. 현재 선택된 실험 질문에 따른 시편 간 XRD 피크 이동(Δ2θ), 이차상 판정 근거, SEM 미세조직 변화 및 물리적 수송 메커니즘에 대해 무엇이든 질문해 주세요.",
       category: "Grounded Research Assistant",
       engine: "MatLens 2.0 정밀 과학 지식 엔진",
     },
   ]);
 
-  // Multi-Instrument Pipeline Integration Status
-  const [pipelineStatus, setPipelineStatus] = useState<{
-    hall: boolean;
-    lfa: boolean;
-    xrd: boolean;
-    sem: boolean;
-    sources: string[];
-    sourceSummary: string;
-  }>({
-    hall: false,
-    lfa: false,
-    xrd: false,
-    sem: false,
-    sources: [],
-    sourceSummary: "측정 데이터 연계 확인 중...",
-  });
+  // =========================================================================
+  // Load or Initialize Comparison Session
+  // =========================================================================
+  const loadQuestionAndAnalyze = useCallback(
+    async (
+      nextQuestion: ComparisonQuestionType,
+      nextBaselineId?: string | null,
+      customSlots?: Array<{
+        project_id: string;
+        xrd_run_id?: string | null;
+        sem_file_id?: string | null;
+        sem_run_id?: string | null;
+      }>,
+      nextNormMode?: "max_100" | "raw",
+      nextOffsetStep?: number
+    ) => {
+      setCompLoading(true);
+      try {
+        const effNorm = nextNormMode ?? normMode;
+        const effOffset = nextOffsetStep ?? offsetStep;
 
-  // XRD Diffractogram & SEM Microstructure Multi-Specimen Inspection State
-  const [xrdStackMode, setXrdStackMode] = useState<"single" | "stacked">("stacked");
-  const [activeSemIdx, setActiveSemIdx] = useState<number>(0);
-  const [semZoomModal, setSemZoomModal] = useState<string | null>(null);
-  const [uploadedSemImageUrl, setUploadedSemImageUrl] = useState<string | null>(null);
+        let slotsToUse = customSlots;
+        let baseIdToUse = nextBaselineId;
 
-  // Load Single Standard Benchmark Preset (NbFeSb Thermoelectric half-Heusler)
-  const loadBenchmarkPreset = () => {
-    setSampleId("NbFeSb-SPS-01");
-    setMaterialName("NbFeSb half-Heusler");
-    setChemicalFormula("NbFeSb");
-    setDopant("Ti (5 at%)");
-    setTempK(300);
-    setHasXrd(true);
-    setCrystalliteNm(42.5);
-    setSpaceGroup("F-43m");
-    setHasSem(true);
-    setGrainSizeUm(2.4);
-    setPorosityPct(1.2);
-    setHasHall(true);
-    setCarrierConc(4.2e20);
-    setHallMobility(22.0);
-    setElecCond(1500.0);
-    setCarrierType("p-type (Hole)");
-    setHasLfa(true);
-    setThermalDiff(2.1);
-    setThermalCond(4.8);
-    setDensityGcm3(8.25);
-    setCpJgK(0.28);
-    setPipelineStatus({
-      hall: true,
-      lfa: true,
-      xrd: true,
-      sem: true,
-      sources: ["NbFeSb 표준 벤치마크 (XRD+SEM+Hall+LFA 전주기)"],
-      sourceSummary: "표준 벤치마크 샘플(NbFeSb) 전주기 데이터 연계 완료",
+        if (!slotsToUse) {
+          const candRes = await api.evaluateComparisonCandidates({
+            question_type: nextQuestion,
+            baseline_project_id: nextBaselineId ?? null,
+            auto_seed_if_empty: true,
+          });
+          baseIdToUse = candRes.baseline_project_id;
+          slotsToUse = (candRes.recommended_project_ids || []).map((pid: string) => ({
+            project_id: pid,
+          }));
+        }
+
+        const res = await api.analyzeComparison({
+          session_id: sessionId,
+          question_type: nextQuestion,
+          baseline_project_id: baseIdToUse ?? null,
+          slots: slotsToUse || [],
+          norm_mode: effNorm,
+          offset_step: effOffset,
+        });
+
+        setCompData(res);
+        setQuestionType(res.question?.id || nextQuestion);
+        setBaselineProjectId(res.baseline_project_id);
+        if (res.session_id) {
+          setSessionId(res.session_id);
+          writeSessionIdToUrl(res.session_id);
+        }
+        setTwoThetaZoomWindow(null);
+      } catch (err: any) {
+        console.error("Comparison analysis error:", err);
+      } finally {
+        setCompLoading(false);
+      }
+    },
+    [normMode, offsetStep, sessionId]
+  );
+
+  // Initial mount: restore existing session_id if present (preserving B->A & A2 across page refresh!), else evaluate default question
+  useEffect(() => {
+    let mounted = true;
+    const initSession = async () => {
+      const existingSid = readSessionIdFromUrl();
+      if (existingSid) {
+        setCompLoading(true);
+        try {
+          const restored = await api.getComparisonSession(existingSid);
+          if (mounted && restored && restored.slots && restored.slots.length > 0) {
+            setCompData(restored);
+            setQuestionType(restored.question?.id || "process_variation");
+            setBaselineProjectId(restored.baseline_project_id);
+            setSessionId(restored.session_id);
+            if (restored.normalization_info?.mode) {
+              setNormMode(restored.normalization_info.mode);
+            }
+            if (restored.normalization_info?.offset_step) {
+              setOffsetStep(restored.normalization_info.offset_step);
+            }
+            setCompLoading(false);
+            return;
+          }
+        } catch {
+          // If session expired or DB reset, fall through to fresh load
+        }
+      }
+      if (mounted) {
+        await loadQuestionAndAnalyze("process_variation", activeProject?.id || null);
+      }
+    };
+    initSession();
+    return () => {
+      mounted = false;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // =========================================================================
+  // Slot Manipulation Handlers (Reorder A<->B, Change FOV A1<->A2, Add/Remove)
+  // =========================================================================
+  const currentSlotsInput = useMemo(() => {
+    if (!compData?.slots) return [];
+    return compData.slots.map((s: any) => ({
+      project_id: s.project_id,
+      xrd_run_id: s.selected_xrd?.run_id || null,
+      sem_file_id: s.selected_sem?.file_id || null,
+      sem_run_id: s.selected_sem?.run_id || null,
+    }));
+  }, [compData]);
+
+  const handleMoveSlot = async (index: number, direction: -1 | 1) => {
+    const next = [...currentSlotsInput];
+    const targetIdx = index + direction;
+    if (targetIdx < 0 || targetIdx >= next.length) return;
+    const temp = next[index];
+    next[index] = next[targetIdx];
+    next[targetIdx] = temp;
+    await loadQuestionAndAnalyze(questionType, baselineProjectId, next);
+  };
+
+  const handleRemoveSlot = async (index: number) => {
+    const next = currentSlotsInput.filter((_: any, i: number) => i !== index);
+    await loadQuestionAndAnalyze(questionType, baselineProjectId, next);
+  };
+
+  const handleToggleCandidateInSlots = async (projectId: string) => {
+    const existsIdx = currentSlotsInput.findIndex((s: any) => s.project_id === projectId);
+    let next;
+    if (existsIdx >= 0) {
+      next = currentSlotsInput.filter((_: any, i: number) => i !== existsIdx);
+    } else {
+      next = [...currentSlotsInput, { project_id: projectId }];
+    }
+    await loadQuestionAndAnalyze(questionType, baselineProjectId, next);
+  };
+
+  const handleSelectSemFov = async (slotIndex: number, newSemFileId: string) => {
+    const next = currentSlotsInput.map((s: any, idx: number) =>
+      idx === slotIndex ? { ...s, sem_file_id: newSemFileId, sem_run_id: null } : s
+    );
+    await loadQuestionAndAnalyze(questionType, baselineProjectId, next);
+  };
+
+  const handleSelectXrdRun = async (slotIndex: number, newXrdRunId: string) => {
+    const next = currentSlotsInput.map((s: any, idx: number) =>
+      idx === slotIndex ? { ...s, xrd_run_id: newXrdRunId } : s
+    );
+    await loadQuestionAndAnalyze(questionType, baselineProjectId, next);
+  };
+
+  const handleReseedVerificationSeries = async () => {
+    setCompLoading(true);
+    try {
+      await api.seedComparisonSeries(true);
+      await loadQuestionAndAnalyze(questionType, null, undefined);
+    } finally {
+      setCompLoading(false);
+    }
+  };
+
+  const openMetadataEditor = (cand: any) => {
+    const m = cand.experiment_meta || {};
+    setEditingMetaProjectId(cand.project_id);
+    setEditingSampleName(cand.sample_name || "");
+    setEditingMetaForm({
+      base_matrix: m.base_matrix || "",
+      nominal_composition: m.nominal_composition || "",
+      dopant_element: m.dopant_element || "",
+      dopant_amount: m.dopant_amount !== undefined ? m.dopant_amount : null,
+      dopant_unit: m.dopant_unit || "at%",
+      process_temp_c: m.process_temp_c !== undefined ? m.process_temp_c : null,
+      process_time_h: m.process_time_h !== undefined ? m.process_time_h : null,
+      atmosphere: m.atmosphere || "Air",
+      process_method: m.process_method || "",
+      replicate_id: m.replicate_id || "",
+      is_synthetic_demo: Boolean(m.is_synthetic_demo),
     });
   };
 
-  // Continuous Flow: Synchronize measured data from other tabs (Hall, LFA, XRD, SEM)
-  const syncMeasuredData = (): boolean => {
-    const loadedSources: string[] = [];
-
-    // 1. Hall Effect Tab Data
+  const handleSaveMetadata = async () => {
+    if (!editingMetaProjectId) return;
+    setSavingMeta(true);
     try {
-      const hRaw = localStorage.getItem("matlens_shared_hall_data");
-      if (hRaw) {
-        const h = JSON.parse(hRaw);
-        setHasHall(true);
-        if (h.carrier_concentration_cm3) setCarrierConc(h.carrier_concentration_cm3);
-        if (h.hall_mobility_cm2_Vs) setHallMobility(h.hall_mobility_cm2_Vs);
-        if (h.electrical_conductivity_S_cm) setElecCond(h.electrical_conductivity_S_cm);
-        if (h.carrier_type) setCarrierType(h.carrier_type);
-        if (h.sample_id) setSampleId(h.sample_id);
-        if (h.material_name) setMaterialName(h.material_name);
-        if (h.dopant) setDopant(h.dopant);
-        loadedSources.push("Hall 전하수송(실측)");
-      }
-    } catch (e) {
-      console.warn("Hall data parse error:", e);
+      await api.updateProject(editingMetaProjectId, {
+        sample_name: editingSampleName,
+        experiment_meta: editingMetaForm,
+        change_summary: `비교 분석 실험 조건 메타데이터 보완 (${editingMetaForm.base_matrix}, ${editingMetaForm.process_temp_c ?? "-"} °C)`,
+      });
+      setEditingMetaProjectId(null);
+      await loadQuestionAndAnalyze(questionType, baselineProjectId, currentSlotsInput);
+    } catch (err: any) {
+      alert("메타데이터 저장 실패: " + (err.message || err));
+    } finally {
+      setSavingMeta(false);
     }
-
-    // 2. LFA Tab Data
-    try {
-      const lRaw = localStorage.getItem("matlens_shared_lfa_data");
-      if (lRaw) {
-        const l = JSON.parse(lRaw);
-        setHasLfa(true);
-        if (l.thermal_diffusivity_mm2_s) setThermalDiff(l.thermal_diffusivity_mm2_s);
-        if (l.thermal_conductivity_W_mK) setThermalCond(l.thermal_conductivity_W_mK);
-        if (l.density_g_cm3) setDensityGcm3(l.density_g_cm3);
-        if (l.specific_heat_J_gK) setCpJgK(l.specific_heat_J_gK);
-        if (l.sample_id && !loadedSources.some((s) => s.includes("Hall"))) setSampleId(l.sample_id);
-        if (l.material_name && !loadedSources.some((s) => s.includes("Hall"))) setMaterialName(l.material_name);
-        loadedSources.push("LFA 열수송(실측)");
-      }
-    } catch (e) {
-      console.warn("LFA data parse error:", e);
-    }
-
-    // 3. XRD Tab Data
-    try {
-      const xRaw = localStorage.getItem("matlens_shared_xrd_data");
-      if (xRaw) {
-        const x = JSON.parse(xRaw);
-        setHasXrd(true);
-        if (x.crystallite_size_nm) setCrystalliteNm(Number(x.crystallite_size_nm.toFixed(1)));
-        if (x.space_group) setSpaceGroup(x.space_group);
-        loadedSources.push("XRD 결정구조(실측)");
-      } else if (activeRun?.xrd_result?.scherrer?.mean_nm) {
-        setHasXrd(true);
-        setCrystalliteNm(Number(activeRun.xrd_result.scherrer.mean_nm.toFixed(1)));
-        loadedSources.push("XRD 결정구조(현재 작업)");
-      }
-    } catch (e) {
-      console.warn("XRD data parse error:", e);
-    }
-
-    // 4. SEM Tab Data & Uploaded Image Synchronization
-    try {
-      const sRaw = localStorage.getItem("matlens_shared_sem_data");
-      let semUrl: string | null = null;
-      if (sRaw) {
-        const s = JSON.parse(sRaw);
-        setHasSem(true);
-        if (s.grain_size_um) setGrainSizeUm(Number(Number(s.grain_size_um).toFixed(2)));
-        if (s.porosity_pct) setPorosityPct(Number(Number(s.porosity_pct).toFixed(1)));
-        if (s.image_url) semUrl = s.image_url;
-        loadedSources.push("SEM 미세조직(실측)");
-      }
-
-      // Check live activeRun and activeProject for SEM image
-      const semFile = activeProject?.files?.find((f) => f.file_role === "sem");
-      if (!semUrl) {
-        if (activeRun?.id && (activeRun.has_overlay || activeRun.status === "completed")) {
-          semUrl = `${api.overlayUrl(activeRun.id)}?v=${activeRun.id}`;
-        } else if (activeRun?.id && activeRun.has_roi_image) {
-          semUrl = `${api.roiUrl(activeRun.id)}?v=${activeRun.id}`;
-        } else if (activeProject?.id && semFile?.id) {
-          semUrl = `${api.rawFileUrl(activeProject.id, semFile.id)}?v=${semFile.id}`;
-        }
-      }
-
-      if (activeRun?.sem_result) {
-        setHasSem(true);
-        const meanGrain =
-          activeRun.sem_result.summary_stats?.mean_diameter ||
-          activeRun.sem_result.grain_intercept?.mean_intercept_length ||
-          activeRun.sem_result.summary_stats?.d50 ||
-          activeRun.sem_result.summary_stats?.mean_um;
-        if (meanGrain) setGrainSizeUm(Number(Number(meanGrain).toFixed(2)));
-        const porosityVal =
-          activeRun.sem_result.porosity?.porosity_fraction_pct ||
-          activeRun.sem_result.porosity?.porosity_percent;
-        if (porosityVal !== undefined) setPorosityPct(Number(Number(porosityVal).toFixed(1)));
-        if (!loadedSources.some((s) => s.includes("SEM"))) {
-          loadedSources.push("SEM 미세조직(실측)");
-        }
-      }
-
-      if (semUrl) {
-        setUploadedSemImageUrl(semUrl);
-      }
-    } catch (e) {
-      console.warn("SEM data parse error:", e);
-    }
-
-    if (activeProject) {
-      if (activeProject.sample_name && !loadedSources.some((s) => s.includes("Hall") || s.includes("LFA"))) {
-        setSampleId(activeProject.sample_name);
-        setMaterialName(activeProject.sample_name);
-      }
-      if (activeProject.expected_formula) setChemicalFormula(activeProject.expected_formula);
-    }
-
-    const hasAnyLive = loadedSources.length > 0;
-    setPipelineStatus({
-      hall: loadedSources.some((s) => s.includes("Hall")),
-      lfa: loadedSources.some((s) => s.includes("LFA")),
-      xrd: loadedSources.some((s) => s.includes("XRD")),
-      sem: loadedSources.some((s) => s.includes("SEM")),
-      sources: loadedSources,
-      sourceSummary: hasAnyLive
-        ? `${loadedSources.join(" + ")} 실측 데이터 연계 활성화`
-        : "개별 탭 측정 데이터 없음 (표준 벤치마크 샘플 로드 권장)",
-    });
-
-    return hasAnyLive;
   };
 
-  // Run Integration
-  const executeIntegration = async () => {
-    setLoading(true);
+  // =========================================================================
+  // Build Interactive Stacked XRD Plotly Traces & Annotations
+  // =========================================================================
+  const selectedPeakObj = useMemo(() => {
+    if (!selectedPeakUid || !compData?.all_peaks_table) return null;
+    return compData.all_peaks_table.find((p: any) => p.peak_uid === selectedPeakUid) || null;
+  }, [compData, selectedPeakUid]);
+
+  const { plotlyTraces, plotlyLayout } = useMemo(() => {
+    const traces: any[] = [];
+    const stackedList = compData?.stacked_traces || [];
+
+    for (const tr of stackedList) {
+      if (showRawAndBgOverlay) {
+        traces.push({
+          x: tr.two_theta,
+          y: tr.stacked_raw_intensity,
+          type: "scatter",
+          mode: "lines",
+          name: `${tr.sample_name} (원시 강도)`,
+          line: { color: "#94A3B8", width: 1, dash: "dot" },
+          hoverinfo: "skip",
+          showlegend: false,
+        });
+        traces.push({
+          x: tr.two_theta,
+          y: tr.stacked_background,
+          type: "scatter",
+          mode: "lines",
+          name: `${tr.sample_name} (배경선)`,
+          line: { color: "#CBD5E1", width: 1, dash: "dash" },
+          hoverinfo: "skip",
+          showlegend: false,
+        });
+      }
+
+      // Main specimen diffraction curve
+      traces.push({
+        x: tr.two_theta,
+        y: tr.stacked_intensity,
+        type: "scatter",
+        mode: "lines",
+        name: tr.legend_label,
+        line: { color: tr.color, width: 2.1 },
+        hovertemplate: `<b>${tr.sample_name}</b><br>2θ: %{x:.3f}°<br>적층 강도: %{y:.1f}<extra></extra>`,
+      });
+
+      // Group peaks by phase role for distinct marker symbols
+      const pks: any[] = tr.peaks || [];
+      if (pks.length > 0) {
+        const markerSymbols = pks.map((pk) => pk.marker_symbol || "circle");
+        const markerColors = pks.map((pk) => {
+          if (pk.peak_uid === selectedPeakUid) return "#DC2626";
+          if (pk.marker_symbol === "circle") return tr.color;
+          if (pk.marker_symbol === "diamond") return "#DC2626";
+          if (pk.marker_symbol === "triangle-up") return "#D97706";
+          return "#64748B";
+        });
+        const markerSizes = pks.map((pk) => (pk.peak_uid === selectedPeakUid ? 13 : 8.5));
+
+        // Only attach (hkl) text on chart to top reflections that have verified reference (hkl)
+        const textLabels = pks.map((pk) => {
+          if (!pk.assigned_hkl) return "";
+          if ((pk.rel_intensity_pct || 0) < 12 && pk.marker_symbol === "circle" && pk.peak_uid !== selectedPeakUid) {
+            return "";
+          }
+          return `${pk.marker_label} ${pk.assigned_hkl}`;
+        });
+
+        traces.push({
+          x: pks.map((pk) => pk.two_theta),
+          y: pks.map((pk) => pk.y_on_stacked_curve + (normMode === "max_100" ? 5.5 : 35)),
+          type: "scatter",
+          mode: "markers+text",
+          name: `${tr.sample_name} 검출 피크`,
+          text: textLabels,
+          textposition: "top center",
+          textfont: { size: 10, family: "Pretendard, sans-serif", color: "#1E293B" },
+          marker: {
+            symbol: markerSymbols,
+            size: markerSizes,
+            color: markerColors,
+            line: { width: 1, color: "#FFFFFF" },
+          },
+          customdata: pks.map((pk) => pk.peak_uid),
+          hovertemplate: pks.map(
+            (pk) =>
+              `<b>[${pk.slot_index}] ${pk.sample_name} — ${pk.peak_id}</b><br>` +
+              `실측 2θ: ${pk.two_theta}° (참조: ${pk.ref_two_theta ?? "미정합"}°, Δ2θ: ${pk.delta_ref_deg !== null ? pk.delta_ref_deg + "°" : "-"})<br>` +
+              `상 귀속: ${pk.assigned_phase} ${pk.assigned_hkl ? "(" + pk.assigned_hkl + ")" : ""}<br>` +
+              `상대강도: ${pk.rel_intensity_pct}% | FWHM: ${pk.fwhm_deg ?? "-"}° | 면적: ${pk.area ?? "-"}<br>` +
+              `피팅상태: ${pk.fit_quality_badge}<extra></extra>`
+          ),
+          showlegend: false,
+        });
+      }
+    }
+
+    const shapes: any[] = [];
+    if (selectedPeakObj) {
+      shapes.push({
+        type: "line",
+        x0: selectedPeakObj.two_theta,
+        x1: selectedPeakObj.two_theta,
+        y0: 0,
+        y1: 1,
+        yref: "paper",
+        line: { color: "#DC2626", width: 1.5, dash: "dash" },
+      });
+    }
+
+    const layout: any = {
+      title: {
+        text: compData?.report_title || "다종 시편 Stacked XRD 회절 패턴 비교",
+        font: { size: 13, family: "Pretendard, sans-serif" },
+        y: 0.97,
+      },
+      xaxis: {
+        title: { text: "회절각 2θ (degrees)" },
+        range: twoThetaZoomWindow || undefined,
+        gridcolor: "#F1F5F9",
+      },
+      yaxis: {
+        title: {
+          text:
+            normMode === "max_100"
+              ? `정규화 강도 (Max=100, 세로 오프셋 +${offsetStep})`
+              : "배경 보정 원시 강도 (Counts + Offset)",
+        },
+        gridcolor: "#F1F5F9",
+      },
+      legend: {
+        orientation: "h" as const,
+        y: -0.2,
+        x: 0.5,
+        xanchor: "center" as const,
+        font: { size: 10.5, family: "Pretendard, sans-serif" },
+      },
+      shapes,
+      margin: { t: 42, r: 20, b: 64, l: 56 },
+      paper_bgcolor: "#FFFFFF",
+      plot_bgcolor: "#FFFFFF",
+      autosize: true,
+    };
+
+    return { plotlyTraces: traces, plotlyLayout: layout };
+  }, [compData, normMode, offsetStep, selectedPeakObj, selectedPeakUid, showRawAndBgOverlay, twoThetaZoomWindow]);
+
+  // Evidence Link Jump Handlers
+  const handleJumpToXrdEvidence = (link: {
+    slot_id?: string;
+    peak_uid?: string | null;
+    two_theta_window?: [number, number];
+  }) => {
+    if (link.peak_uid) {
+      setSelectedPeakUid(link.peak_uid);
+    }
+    if (link.two_theta_window && link.two_theta_window.length === 2) {
+      setTwoThetaZoomWindow(link.two_theta_window);
+    }
+    xrdSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handleJumpToSemEvidence = (link: { slot_id?: string }) => {
+    if (link.slot_id) {
+      setHighlightedSlotId(link.slot_id);
+      window.setTimeout(() => setHighlightedSlotId(null), 3500);
+    }
+    semSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  // =========================================================================
+  // Transport / Literature RAG / Assistant Handlers
+  // =========================================================================
+  const executeTransportIntegration = async () => {
     try {
       const resp = await api.runIntegratedAnalysis({
         sample_id: sampleId,
@@ -304,85 +578,26 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
               specific_heat_J_gK: cpJgK,
             }
           : null,
-        utm_data: hasUtm ? { youngs_modulus_GPa: youngsModulus } : null,
+        utm_data: null,
       });
       setResult(resp);
 
-      // Search literature automatically on integration
-      executeLiteratureSearch();
-
-      // Synthesize 12-Section Korean AI Interpretation
-      synthesizeKoreanAiReport(resp);
-    } catch (err: any) {
-      alert("통합 분석 실행 오류: " + (err.message || err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Search Literature
-  const executeLiteratureSearch = async () => {
-    setLitLoading(true);
-    try {
-      const resp = await api.searchLiterature({
+      setLitLoading(true);
+      const litResp = await api.searchLiterature({
         material_name: materialName,
         chemical_composition: chemicalFormula,
         dopant: dopant,
-        instrument: searchInstrument,
+        instrument: "XRD + SEM + Hall + LFA",
         temperature_C: Math.round(tempK - 273.15),
-        limit: 5,
+        limit: 4,
       });
-      setReferences(resp.references || []);
-    } catch (err: any) {
-      console.warn("문헌 검색 실패:", err);
-    } finally {
+      setReferences(litResp.references || []);
+      setLitLoading(false);
+    } catch {
       setLitLoading(false);
     }
   };
 
-  // Synthesize Korean AI Report
-  const synthesizeKoreanAiReport = (intResult: IntegratedAnalysisResult) => {
-    const wf = intResult.wiedemann_franz;
-
-    const report: ScientificInterpretation = {
-      analysis_summary: `${materialName} (${chemicalFormula})의 다종 기기 통합 분석 결과, 실온(${tempK} K)에서 전하 및 열수송 특성의 물리적 상호작용이 명확히 규명되었습니다. 특히 전체 열전도도 중 포논 격자 기여도가 ${wf ? wf.lattice_fraction_pct.toFixed(1) + "%" : "85% 이상"}로 주도적이며, 결정립계 산란이 이동도와 열전도도에 동시에 영향을 미치고 있습니다.`,
-      input_data_summary: `시료 ID: ${sampleId} | 조성: ${chemicalFormula} (도펀트: ${dopant}) | 평가 온도: ${tempK} K (${(tempK - 273.15).toFixed(1)} °C) | 통합 기기: ${intResult.instruments_included.join(", ")}`,
-      data_quality_assessment: "각 측정 기기의 유효 신호 대 잡음비(SNR)가 높고 이상치(Outlier)가 배제되었으며, van der Pauw 대칭성 및 Parker 1차원 단열 조건이 양호하게 충족되었습니다.",
-      calculated_properties: `• 캐리어 농도: ${carrierConc.toExponential(2)} cm⁻³ (${carrierType})\n• Hall 이동도: ${hallMobility.toFixed(1)} cm²/(V·s)\n• 열확산도: ${thermalDiff.toFixed(2)} mm²/s\n• 열전도도: ${thermalCond.toFixed(2)} W/(m·K)\n• XRD 결정자 크기: ${crystalliteNm.toFixed(1)} nm\n• SEM 평균 입경: ${grainSizeUm.toFixed(2)} µm`,
-      graph_interpretation: "Wiedemann–Franz 분리 그래프에서 전자 열전도(κ_e) 대비 격자 포논 열전도(κ_L)가 압도적으로 높은 비중을 차지합니다. 이는 전하 운반자보다 결정 격자의 비조화 진동이 열전달의 주 매개체임을 입증합니다.",
-      composition_processing_interpretation: `${dopant} 첨가 및 소결 공정으로 형성된 미세조직(평균 입경 ${grainSizeUm} µm)이 결정립계 전위 장벽을 형성하여, 전자의 이동도를 적정 수준으로 유지하면서도 고주파 포논을 효과적으로 산란시키고 있습니다.`,
-      literature_comparison: "검증된 학술 논문(Fu et al., PNAS 2015, DOI: 10.1073/pnas.1517448112 및 Prince et al., Phys. Rev., DOI: 10.1103/PhysRev.96.28)의 공인 벤치마크 값과 10% 이내의 높은 정합성을 보입니다.",
-      mechanism_discussion: "지배적인 전자 산란 기전은 음향 포논 격자 산란(Acoustic Phonon Scattering) 및 결정립계 산란(Grain Boundary Scattering)이며, 열전도에서는 비조화 포논-포논 충돌(Umklapp Process)이 고유 열저항으로 작용합니다.",
-      alternative_explanations: "실측 열전도도가 기준치보다 낮거나 이동도가 감소한 원인으로는 (1) 시료 내부의 잔류 미세 기공(Porosity ${porosityPct}%), (2) 도펀트의 불완전 고용에 의한 2차상 계면 저항의 가능성을 함께 고려할 수 있습니다.",
-      limitations_and_uncertainty: "단일 밴드(Single Parabolic Band) 모델 및 표준 Sommerfeld 로렌츠 수(L₀ = 2.44 × 10⁻⁸ W·Ω/K²)를 가정하였으며, 다중 캐리어 전도나 비포물선 밴드 효과에 따른 미세 편차가 존재할 수 있습니다.",
-      suggested_additional_experiments: [
-        "온도 가변 Hall Effect 측정 (80 K ~ 400 K): 이온화 불순물 산란과 격자 포논 산란의 온도 교차점 규명",
-        "온도 가변 LFA 측정 (상온 ~ 800 °C): 고온 포논 Umklapp 산란(κ ~ 1/T) 감쇠 거동 정량화",
-        "EBSD (전자후방산란회절) 분석: 결정립계 경각(Misorientation Angle) 및 특수 입계 분포 평가",
-      ],
-      references: references.map((r) => ({
-        id: r.id,
-        doi: r.doi,
-        title: r.title,
-        journal: r.journal,
-        year: r.year,
-        verified: true,
-      })),
-      ai_engine: "Vertex AI & Grounded Gemini Scientific Engine (한국어 정밀 해설)",
-    };
-    setAiReport(report);
-  };
-
-  // On mount: attempt to synchronize live measured data from tabs, otherwise load standard benchmark sample
-  useEffect(() => {
-    const hasLive = syncMeasuredData();
-    if (!hasLive) {
-      loadBenchmarkPreset();
-    }
-    executeIntegration();
-  }, []);
-
-  // Handle Interactive Assistant Chat
   const handleSendQa = async (queryText?: string) => {
     const q = (queryText || qaInput).trim();
     if (!q || qaLoading) return;
@@ -391,20 +606,26 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
     setQaLoading(true);
 
     try {
+      const firstSlot = compData?.slots?.[0];
+      const activeMat = firstSlot?.experiment_meta?.base_matrix || materialName;
+      const activeForm = firstSlot?.experiment_meta?.nominal_composition || chemicalFormula;
+
       const resp = await api.chatAssistant({
         message: q,
-        material_name: materialName,
-        chemical_composition: chemicalFormula,
-        instrument: "Cross-Instrument (Hall + LFA + XRD + SEM)",
+        material_name: activeMat,
+        chemical_composition: activeForm,
+        instrument: "Multi-Specimen XRD + SEM Comparison & Transport",
         calculated_properties: {
-          carrier_concentration_cm3: carrierConc,
-          hall_mobility_cm2_Vs: hallMobility,
-          electrical_conductivity_S_cm: elecCond,
-          thermal_diffusivity_mm2_s: thermalDiff,
-          thermal_conductivity_W_mK: thermalCond,
-          crystallite_size_nm: crystalliteNm,
-          grain_size_um: grainSizeUm,
-          wiedemann_franz: result?.wiedemann_franz,
+          experimental_question: compData?.question?.question,
+          compared_specimens: (compData?.slots || []).map((s: any) => ({
+            sample_name: s.sample_name,
+            conditions: s.condition_comparison?.summary_sentence,
+            primary_phase: s.selected_xrd?.primary_phase?.name,
+            scherrer_nm: s.selected_xrd?.scherrer_mean_nm,
+            sem_fov: s.selected_sem?.fov_label,
+            sem_d50: s.selected_sem?.quant_metrics?.d50,
+            sem_unit: s.selected_sem?.quant_metrics?.unit,
+          })),
         },
         references: references,
       });
@@ -415,7 +636,7 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
           sender: "ai",
           text: resp.reply,
           category: resp.category || "Grounded Research Assistant",
-          engine: resp.engine || "MatLens 2.0 정밀 과학 엔진",
+          engine: resp.engine || "Vertex AI / Gemini + Materials Project DB",
         },
       ]);
     } catch (err: any) {
@@ -423,7 +644,7 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
         ...prev,
         {
           sender: "ai",
-          text: `[오류 안내] 연구 어시스턴트 응답 생성 중 문제가 발생했습니다: ${err.message || err}`,
+          text: `[오류 안내] 응답 생성 중 문제가 발생했습니다: ${err.message || err}`,
           category: "System Error",
         },
       ]);
@@ -432,57 +653,6 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
     }
   };
 
-  // Download High-Readability Scientific PDF Report
-  const handleDownloadPdf = async () => {
-    setPdfDownloading(true);
-    try {
-      await api.downloadScientificPdfReport(
-        {
-          sample_id: sampleId,
-          material_name: materialName,
-          chemical_composition: chemicalFormula,
-          dopant: dopant,
-          temperature_K: tempK,
-          instruments_included: result?.instruments_included || ["Hall", "LFA", "XRD", "SEM"],
-          calculated_properties: {
-            carrier_concentration_cm3: hasHall ? carrierConc : undefined,
-            hall_mobility_cm2_Vs: hasHall ? hallMobility : undefined,
-            electrical_conductivity_S_cm: hasHall ? elecCond : undefined,
-            thermal_diffusivity_mm2_s: hasLfa ? thermalDiff : undefined,
-            thermal_conductivity_W_mK: hasLfa ? thermalCond : undefined,
-            crystallite_size_nm: hasXrd ? crystalliteNm : undefined,
-            grain_size_um: hasSem ? grainSizeUm : undefined,
-          },
-          wiedemann_franz: result?.wiedemann_franz,
-          grain_correlation: result?.xrd_sem_correlation,
-          ai_interpretation: aiReport,
-          references: references,
-          xrd_diffraction_data: {
-            two_theta: [26.0, 30.1, 43.1, 51.0, 53.5, 62.7, 69.1, 71.2],
-            intensity: [720, 980, 1850, 820, 610, 1240, 540, 790],
-          },
-          xrd_peaks: [
-            { "2t": 26.0, d: 3.43, fwhm: 0.22, c_nm: crystalliteNm, hkl: "111" },
-            { "2t": 30.1, d: 2.97, fwhm: 0.20, c_nm: crystalliteNm, hkl: "200" },
-            { "2t": 43.1, d: 2.10, fwhm: 0.21, c_nm: crystalliteNm, hkl: "220" },
-            { "2t": 51.0, d: 1.79, fwhm: 0.23, c_nm: crystalliteNm, hkl: "311" },
-            { "2t": 62.7, d: 1.49, fwhm: 0.24, c_nm: crystalliteNm, hkl: "400" },
-          ],
-          sem_metrics: {
-            grain_size_um: grainSizeUm,
-            porosity_pct: porosityPct,
-          },
-        },
-        `MatLens2_통합분석보고서_${sampleId}.pdf`
-      );
-    } catch (err: any) {
-      alert("PDF 보고서 다운로드 실패: " + (err.message || err));
-    } finally {
-      setPdfDownloading(false);
-    }
-  };
-
-  // Pie chart data for Wiedemann-Franz Law breakdown (Polished Donut with inside labels & legend below)
   const pieData = result?.wiedemann_franz
     ? [
         {
@@ -504,7 +674,7 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
 
   const pieLayout = {
     title: {
-      text: "Wiedemann–Franz Law 열전도 메커니즘 분리 (κ = κ_e + κ_L)",
+      text: "Wiedemann–Franz Law 열전도 분리 (κ = κ_e + κ_L)",
       font: { size: 13, family: "Pretendard, sans-serif" },
       y: 0.96,
     },
@@ -521,598 +691,1438 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
     autosize: true,
   };
 
-  // XRD Diffraction curves (Single vs Stacked Multi-Specimen Mode)
-  const xrdPlotTraces = useMemo(() => {
-    const points = 350;
-    const tt = Array.from({ length: points }, (_, i) => 20 + (i * 60) / (points - 1));
-
-    // Bragg peak centers for NbFeSb (F-43m cubic half-Heusler)
-    const braggPeaks = [
-      { t: 26.0, h: 720, hkl: "111" },
-      { t: 30.1, h: 980, hkl: "200" },
-      { t: 43.1, h: 1850, hkl: "220" },
-      { t: 51.0, h: 820, hkl: "311" },
-      { t: 53.5, h: 610, hkl: "222" },
-      { t: 62.7, h: 1240, hkl: "400" },
-      { t: 69.1, h: 540, hkl: "331" },
-      { t: 71.2, h: 790, hkl: "420" },
-    ];
-
-    const generateProfile = (offsetY: number, peakScale: number, noiseScale: number) => {
-      return tt.map((t) => {
-        let val = offsetY + 60 + (Math.sin(t * 1.5) * 4 + (t % 3) * 2) * noiseScale;
-        for (const bp of braggPeaks) {
-          const diff = (t - bp.t) / 0.32;
-          val += bp.h * peakScale * Math.exp(-diff * diff);
-        }
-        return Math.round(val * 10) / 10;
-      });
-    };
-
-    if (xrdStackMode === "single") {
-      return [
-        {
-          x: tt,
-          y: generateProfile(0, 1.0, 1.0),
-          type: "scatter",
-          mode: "lines",
-          name: `${sampleId} 실측 회절선`,
-          line: { color: "#1D4ED8", width: 2 },
-        },
-      ];
-    }
-
-    // Stacked mode: 3 vertical offset traces
-    return [
-      {
-        x: tt,
-        y: generateProfile(0, 1.0, 1.0),
-        type: "scatter",
-        mode: "lines",
-        name: `Sample #1: ${sampleId} (실측 SPS 소결체, 300K)`,
-        line: { color: "#1D4ED8", width: 2 },
-      },
-      {
-        x: tt,
-        y: generateProfile(1600, 1.15, 0.6),
-        type: "scatter",
-        mode: "lines",
-        name: "Sample #2: NbFeSb-SPS-02 (열처리 800°C 48h 소둔재)",
-        line: { color: "#059669", width: 2 },
-      },
-      {
-        x: tt,
-        y: generateProfile(3200, 0.9, 0.2),
-        type: "scatter",
-        mode: "lines",
-        name: "Standard Ref: NbFeSb (ICSD / MP mp-aaaaanyz)",
-        line: { color: "#7C3AED", width: 1.8, dash: "dot" },
-      },
-    ];
-  }, [xrdStackMode, sampleId]);
-
-  const xrdPlotLayout = useMemo(() => {
-    return {
-      title: {
-        text: xrdStackMode === "stacked" 
-          ? "다종 시편 Stacked 회절 패턴 비교 (Cu Kα, Offset Stacking)" 
-          : `${sampleId} 고해상도 회절 패턴 (Cu Kα, λ = 1.5406 Å)`,
-        font: { size: 13, family: "Pretendard, sans-serif" },
-        y: 0.96,
-      },
-      xaxis: {
-        title: { text: "회절각 2θ (degree)" },
-        range: [20, 80],
-        gridcolor: "#F1F5F9",
-      },
-      yaxis: {
-        title: { text: xrdStackMode === "stacked" ? "적층 강도 (Offset Intensity, a.u.)" : "강도 (Intensity, a.u.)" },
-        gridcolor: "#F1F5F9",
-      },
-      legend: {
-        orientation: "h" as const,
-        y: -0.25,
-        x: 0.5,
-        xanchor: "center" as const,
-        font: { size: 10, family: "Pretendard, sans-serif" },
-      },
-      margin: { t: 36, r: 16, b: 56, l: 48 },
-      paper_bgcolor: "#FFFFFF",
-      plot_bgcolor: "#FFFFFF",
-      autosize: true,
-    };
-  }, [xrdStackMode, sampleId]);
-
-  // SEM Multi-Specimen Parallel Comparison List
-  const semSpecimens = [
-    {
-      id: "spec-1",
-      name: `${activeProject?.sample_name || sampleId} (실측 시편)`,
-      condition: "SPS 950°C, 65 MPa",
-      grainSize: `${grainSizeUm} µm`,
-      porosity: `${porosityPct}%`,
-      density: `${(100 - porosityPct).toFixed(1)}%`,
-      morphology: "치밀 등축정립 (Equiaxed)",
-      imgSrc:
-        uploadedSemImageUrl ||
-        (activeRun?.id ? `${api.overlayUrl(activeRun.id)}?v=${activeRun.id}` : null) ||
-        "/samples/sample_sintered_grains_sem.png",
-      badge: "현재 실측 시편",
-    },
-    {
-      id: "spec-2",
-      name: "NbFeSb-Annealed (열처리재)",
-      condition: "진공 소둔 800°C 48h",
-      grainSize: "4.8 µm",
-      porosity: "0.6%",
-      density: "99.4%",
-      morphology: "조대화 결정립 (Coarsened)",
-      imgSrc: "/samples/particles_synthetic.png",
-      badge: "결정립 조대화 비교군",
-    },
-    {
-      id: "spec-3",
-      name: "NbFeSb-Porous (저온 소결재)",
-      condition: "SPS 800°C, 30 MPa",
-      grainSize: "0.9 µm",
-      porosity: "5.4%",
-      density: "94.6%",
-      morphology: "미세립 다공성 (Sub-micron)",
-      imgSrc: "/samples/sample_tio2_particles_sem.png",
-      badge: "다공성 비교군",
-    },
-  ];
+  const candEval = compData?.candidate_evaluation;
+  const activeSlots: any[] = compData?.slots || [];
+  const reflectionEvolution: any[] = compData?.reflection_evolution || [];
+  const allPeaksTable: any[] = compData?.all_peaks_table || [];
+  const crossCards: any[] = compData?.cross_analysis_cards || [];
+  const replicateDeviations: any[] = compData?.replicate_deviations || [];
 
   return (
     <div className="space-y-6">
-      {/* Top Banner & Quick Presets */}
-      <div className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#EDE9FE] text-[#7C3AED] text-[12px] font-bold mb-2">
-            <Share2 className="w-3.5 h-3.5" />
-            MatLens 2.0 Unified Report & Literature RAG
-          </div>
-          <h2 className="text-[22px] font-bold text-[#191F28]">다종 기기 통합 분석 & 문헌 RAG 리포트</h2>
-          <p className="text-[14px] text-[#6B7684] mt-1">
-            XRD(결정상) · SEM(미세조직) · Hall(전하 수송) · LFA(열 수송) 데이터를 한눈에 통합하고, 검증된 학술 논문 벤치마크와 비교하여 과학적 신뢰성을 입증합니다.
-          </p>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            disabled={pdfDownloading}
-            onClick={handleDownloadPdf}
-            className="px-4 py-2.5 rounded-[12px] bg-[#1E40AF] hover:bg-[#1D4ED8] text-white text-[13px] font-bold transition flex items-center gap-2 shadow cursor-pointer disabled:opacity-60"
-          >
-            {pdfDownloading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Download className="w-4 h-4" />
-            )}
-            PDF 분석 보고서 다운로드
-          </button>
-        </div>
-      </div>
-
-      {/* Continuous Measurement Pipeline Status Bar */}
-      <div className="bg-[#F8FAFC] rounded-[18px] p-5 border border-[#CBD5E1] space-y-3 shadow-sm">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-[#E2E8F0] pb-2.5">
-          <div className="flex items-center gap-2">
-            <Cpu className="w-5 h-5 text-[#7C3AED]" />
-            <h3 className="text-[14px] font-bold text-[#1E293B]">다종 기기 측정 데이터 연속 흐름 파이프라인</h3>
-            <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-[#EDE9FE] text-[#6D28D9]">
-              {pipelineStatus.sourceSummary}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                syncMeasuredData();
-                executeIntegration();
-              }}
-              className="px-3.5 py-1.5 rounded-[10px] bg-white border border-[#CBD5E1] hover:bg-[#F1F5F9] text-[#1E293B] text-[12px] font-bold flex items-center gap-1.5 cursor-pointer shadow-sm transition"
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-[#2563EB]" />
-              내 실측 데이터로 전체 동기화
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                loadBenchmarkPreset();
-                executeIntegration();
-              }}
-              className="px-3.5 py-1.5 rounded-[10px] bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-[12px] font-bold flex items-center gap-1.5 cursor-pointer shadow-sm transition"
-            >
-              <Activity className="w-3.5 h-3.5" />
-              표준 벤치마크 샘플(NbFeSb) 로드
-            </button>
-          </div>
-        </div>
-
-        {/* 4-Instrument Data Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-[12px]">
-          <div className={`p-3 rounded-[12px] border transition ${pipelineStatus.xrd ? "bg-[#EFF6FF] border-[#BFDBFE] text-[#1E40AF]" : "bg-white border-[#E2E8F0] text-[#64748B]"}`}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="font-bold">XRD 결정구조</span>
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${pipelineStatus.xrd ? "bg-[#DBEAFE] text-[#1D4ED8]" : "bg-[#F1F5F9] text-[#94A3B8]"}`}>
-                {pipelineStatus.xrd ? "실측 연계됨" : "기본값"}
-              </span>
-            </div>
-            <div className="text-[13px] font-bold text-[#1E293B]">{hasXrd ? `D = ${crystalliteNm} nm` : "미측정"}</div>
-            <span className="text-[11px] text-[#64748B]">공간군: {spaceGroup}</span>
-          </div>
-
-          <div className={`p-3 rounded-[12px] border transition ${pipelineStatus.sem ? "bg-[#EFF6FF] border-[#BFDBFE] text-[#1E40AF]" : "bg-white border-[#E2E8F0] text-[#64748B]"}`}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="font-bold">SEM 미세조직</span>
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${pipelineStatus.sem ? "bg-[#DBEAFE] text-[#1D4ED8]" : "bg-[#F1F5F9] text-[#94A3B8]"}`}>
-                {pipelineStatus.sem ? "실측 연계됨" : "기본값"}
-              </span>
-            </div>
-            <div className="text-[13px] font-bold text-[#1E293B]">{hasSem ? `입경 = ${grainSizeUm} µm` : "미측정"}</div>
-            <span className="text-[11px] text-[#64748B]">기공률: {porosityPct}%</span>
-          </div>
-
-          <div className={`p-3 rounded-[12px] border transition ${pipelineStatus.hall ? "bg-[#EDE9FE] border-[#DDD6FE] text-[#6D28D9]" : "bg-white border-[#E2E8F0] text-[#64748B]"}`}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="font-bold">Hall 전하수송</span>
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${pipelineStatus.hall ? "bg-[#EDE9FE] text-[#7C3AED]" : "bg-[#F1F5F9] text-[#94A3B8]"}`}>
-                {pipelineStatus.hall ? "실측 연계됨" : "기본값"}
-              </span>
-            </div>
-            <div className="text-[13px] font-bold text-[#1E293B]">{hasHall ? `n = ${carrierConc.toExponential(1)} cm⁻³` : "미측정"}</div>
-            <span className="text-[11px] text-[#64748B]">이동도: {hallMobility.toFixed(1)} cm²/Vs</span>
-          </div>
-
-          <div className={`p-3 rounded-[12px] border transition ${pipelineStatus.lfa ? "bg-[#FFFBEB] border-[#FDE68A] text-[#B45309]" : "bg-white border-[#E2E8F0] text-[#64748B]"}`}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="font-bold">LFA 열수송</span>
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${pipelineStatus.lfa ? "bg-[#FEF3C7] text-[#D97706]" : "bg-[#F1F5F9] text-[#94A3B8]"}`}>
-                {pipelineStatus.lfa ? "실측 연계됨" : "기본값"}
-              </span>
-            </div>
-            <div className="text-[13px] font-bold text-[#1E293B]">{hasLfa ? `κ = ${thermalCond.toFixed(2)} W/m·K` : "미측정"}</div>
-            <span className="text-[11px] text-[#64748B]">열확산도: {thermalDiff.toFixed(2)} mm²/s</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Dataset Association & Parameters */}
+      {/* =====================================================================
+          HEADER & SYNCHRONIZED MULTI-FORMAT EXPORT BAR
+         ===================================================================== */}
       <div className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-4">
-        <h3 className="text-[16px] font-bold text-[#191F28] flex items-center gap-2">
-          <Layers className="w-4 h-4 text-[#7C3AED]" />
-          시료 메타데이터 및 분석기기 연계 설정
-        </h3>
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+          <div>
+            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#EFF6FF] text-[#1D4ED8] text-[12px] font-bold mb-2 border border-[#BFDBFE]">
+              <Share2 className="w-3.5 h-3.5" />
+              실험 질문 기반 다종 시편 비교 분석 & XRD-SEM 교차 검증 리포트
+            </div>
+            <h2 className="text-[20px] sm:text-[22px] font-bold text-[#191F28]">
+              {compData?.report_title || "실험 조건 변화에 따른 결정상(XRD) 및 미세조직(SEM) 통합 비교 리포트"}
+            </h2>
+            <p className="text-[13px] text-[#4E5968] mt-1">
+              비교 질문과 통제 조건 → 시편별 측정자료(XRD·SEM 시야) 매핑 → 세로 오프셋 XRD 중첩 그래프 및 피크·이차상 표 → 동일 순서의 SEM 병렬 원본 → 4단계 교차 해석 순서로 검증합니다.
+            </p>
+          </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <div>
-            <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">시료 ID (Sample ID)</label>
-            <input
-              type="text"
-              value={sampleId}
-              onChange={(e) => setSampleId(e.target.value)}
-              className="w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] text-[13px] font-bold"
-            />
-          </div>
-          <div>
-            <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">재료명 (Material Name)</label>
-            <input
-              type="text"
-              value={materialName}
-              onChange={(e) => setMaterialName(e.target.value)}
-              className="w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] text-[13px]"
-            />
-          </div>
-          <div>
-            <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">화학식 및 도펀트</label>
-            <input
-              type="text"
-              value={`${chemicalFormula} (${dopant})`}
-              onChange={(e) => setChemicalFormula(e.target.value)}
-              className="w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] text-[13px]"
-            />
-          </div>
-          <div>
-            <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">측정 온도 T (K)</label>
-            <input
-              type="number"
-              value={tempK}
-              onChange={(e) => setTempK(Number(e.target.value))}
-              className="w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] text-[13px]"
-            />
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              disabled={compLoading}
+              onClick={handleReseedVerificationSeries}
+              className="px-3 py-2 rounded-[10px] bg-[#F8FAFC] hover:bg-[#F1F5F9] text-[#334155] border border-[#CBD5E1] text-[12px] font-semibold transition flex items-center gap-1.5 cursor-pointer"
+              title="열처리 시리즈(A/B/C), 도핑 시리즈(D1/D2/D3/D4), 무관 재료(Si) 검증 데이터를 초기화·재생성합니다"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${compLoading ? "animate-spin" : ""}`} />
+              검증 시편 시리즈 초기화
+            </button>
+
+            {sessionId && (
+              <>
+                <a
+                  href={api.comparisonXrdPngUrl(sessionId)}
+                  download
+                  className="px-3 py-2 rounded-[10px] bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#1D4ED8] border border-[#BFDBFE] text-[12px] font-bold transition flex items-center gap-1.5"
+                  title="현재 시편 순서와 (hkl)·상 마커가 반영된 300 DPI 중첩 XRD 차트 PNG 다운로드"
+                >
+                  <ImageIcon className="w-3.5 h-3.5" />
+                  XRD 중첩 차트 (PNG)
+                </a>
+                <a
+                  href={api.comparisonPeaksCsvUrl(sessionId)}
+                  download
+                  className="px-3 py-2 rounded-[10px] bg-[#F0FDF4] hover:bg-[#DCFCE7] text-[#15803D] border border-[#BBF7D0] text-[12px] font-bold transition flex items-center gap-1.5"
+                  title="현재 비교 시편 순서의 검출 피크·면간격·반가폭·상 귀속 CSV 다운로드"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  비교 피크 표 (CSV)
+                </a>
+                <a
+                  href={api.comparisonJsonUrl(sessionId)}
+                  download
+                  className="px-3 py-2 rounded-[10px] bg-[#F8FAFC] hover:bg-[#E2E8F0] text-[#334155] border border-[#CBD5E1] text-[12px] font-bold transition flex items-center gap-1.5"
+                  title="시편 순서, 선택된 SEM 시야(SHA-256), XRD 피크 및 교차 해석 전체 JSON 번들 다운로드"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  결과 번들 (JSON)
+                </a>
+                <a
+                  href={api.comparisonPdfUrl(sessionId)}
+                  download
+                  className="px-4 py-2 rounded-[10px] bg-[#1E40AF] hover:bg-[#1D4ED8] text-white text-[12px] font-bold transition flex items-center gap-1.5 shadow-sm"
+                  title="현재 시편 순서 및 대표 SEM 원본 이미지가 반영된 통합 비교 리포트 PDF 다운로드"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  통합 비교 리포트 (PDF)
+                </a>
+              </>
+            )}
           </div>
         </div>
-
-        {/* Instrument Switch Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
-          {/* XRD */}
-          <div className={`p-4 rounded-[14px] border ${hasXrd ? "border-[#3182F6] bg-[#F8FAFC]" : "border-[#E5E8EB] bg-[#FAFAFA] opacity-60"}`}>
-            <label className="flex items-center gap-2 cursor-pointer font-bold text-[13px] text-[#191F28] mb-2">
-              <input type="checkbox" checked={hasXrd} onChange={(e) => setHasXrd(e.target.checked)} />
-              <span>XRD 결정구조 데이터</span>
-            </label>
-            <div className="space-y-1.5 text-[12px]">
-              <span className="text-[#64748B] block">Scherrer 결정자 크기 (D):</span>
-              <input
-                type="number"
-                disabled={!hasXrd}
-                value={crystalliteNm}
-                onChange={(e) => setCrystalliteNm(Number(e.target.value))}
-                className="w-full px-2 py-1 rounded-[6px] border border-[#CBD5E1] bg-white text-[12px]"
-              />
-              <span className="text-[11px] text-[#94A3B8]">단위: nm (공간군: {spaceGroup})</span>
-            </div>
-          </div>
-
-          {/* SEM */}
-          <div className={`p-4 rounded-[14px] border ${hasSem ? "border-[#3182F6] bg-[#F8FAFC]" : "border-[#E5E8EB] bg-[#FAFAFA] opacity-60"}`}>
-            <label className="flex items-center gap-2 cursor-pointer font-bold text-[13px] text-[#191F28] mb-2">
-              <input type="checkbox" checked={hasSem} onChange={(e) => setHasSem(e.target.checked)} />
-              <span>SEM 미세조직 데이터</span>
-            </label>
-            <div className="space-y-1.5 text-[12px]">
-              <span className="text-[#64748B] block">평균 입경 (Grain Size):</span>
-              <input
-                type="number"
-                step="0.1"
-                disabled={!hasSem}
-                value={grainSizeUm}
-                onChange={(e) => setGrainSizeUm(Number(e.target.value))}
-                className="w-full px-2 py-1 rounded-[6px] border border-[#CBD5E1] bg-white text-[12px]"
-              />
-              <span className="text-[11px] text-[#94A3B8]">단위: µm (기공률 {porosityPct}%)</span>
-            </div>
-          </div>
-
-          {/* Hall */}
-          <div className={`p-4 rounded-[14px] border ${hasHall ? "border-[#3182F6] bg-[#F8FAFC]" : "border-[#E5E8EB] bg-[#FAFAFA] opacity-60"}`}>
-            <label className="flex items-center gap-2 cursor-pointer font-bold text-[13px] text-[#191F28] mb-2">
-              <input type="checkbox" checked={hasHall} onChange={(e) => setHasHall(e.target.checked)} />
-              <span>Hall 전하수송 데이터</span>
-            </label>
-            <div className="space-y-1.5 text-[12px]">
-              <span className="text-[#64748B] block">전기 전도도 (σ, S/cm):</span>
-              <input
-                type="number"
-                disabled={!hasHall}
-                value={elecCond}
-                onChange={(e) => setElecCond(Number(e.target.value))}
-                className="w-full px-2 py-1 rounded-[6px] border border-[#CBD5E1] bg-white text-[12px]"
-              />
-              <span className="text-[11px] text-[#94A3B8]">이동도: {hallMobility} cm²/Vs</span>
-            </div>
-          </div>
-
-          {/* LFA */}
-          <div className={`p-4 rounded-[14px] border ${hasLfa ? "border-[#3182F6] bg-[#F8FAFC]" : "border-[#E5E8EB] bg-[#FAFAFA] opacity-60"}`}>
-            <label className="flex items-center gap-2 cursor-pointer font-bold text-[13px] text-[#191F28] mb-2">
-              <input type="checkbox" checked={hasLfa} onChange={(e) => setHasLfa(e.target.checked)} />
-              <span>LFA 열물성 데이터</span>
-            </label>
-            <div className="space-y-1.5 text-[12px]">
-              <span className="text-[#64748B] block">열전도도 (κ, W/m·K):</span>
-              <input
-                type="number"
-                step="0.1"
-                disabled={!hasLfa}
-                value={thermalCond}
-                onChange={(e) => setThermalCond(Number(e.target.value))}
-                className="w-full px-2 py-1 rounded-[6px] border border-[#CBD5E1] bg-white text-[12px]"
-              />
-              <span className="text-[11px] text-[#94A3B8]">열확산도: {thermalDiff} mm²/s</span>
-            </div>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          disabled={loading}
-          onClick={executeIntegration}
-          className="w-full py-3 rounded-[12px] bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-[14px] font-bold transition flex justify-center items-center gap-2 cursor-pointer shadow"
-        >
-          {loading ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              다종 기기 물리 모델 연계 및 문헌 분석 중...
-            </>
-          ) : (
-            "다종 기기 통합 연계 분석 및 문헌 RAG 실행"
-          )}
-        </button>
       </div>
 
-      {/* Synthesis-to-Properties Chain */}
-      {result && (
-        <div className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-4">
-          <h3 className="text-[16px] font-bold text-[#191F28] flex items-center gap-2">
-            <Cpu className="w-5 h-5 text-[#7C3AED]" />
-            재료 전주기 흐름 (Synthesis → Structure → Transport → Mechanics)
-          </h3>
+      {/* =====================================================================
+          STAGE 1: 실험 질문 선택 및 통제·변경·교란 조건 검증
+         ===================================================================== */}
+      <div className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-5">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-[#E2E8F0] pb-3">
+          <div>
+            <span className="text-[11px] font-bold text-[#2563EB] uppercase tracking-wider">STEP 1 · EXPERIMENTAL QUESTION & CONTROLLED CONDITIONS</span>
+            <h3 className="text-[17px] font-bold text-[#191F28] mt-0.5">
+              1. 실험 질문 선택 및 시편 비교군 구성 기준 검증
+            </h3>
+          </div>
+          <span className="text-[12px] text-[#64748B] font-medium bg-[#F8FAFC] px-3 py-1 rounded-full border border-[#E2E8F0]">
+            정렬 규칙: <strong className="text-[#1E293B]">{candEval?.sorting_rule_description || "실험 질문 기준 자동 정렬"}</strong>
+          </span>
+        </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-            {result.synthesis_to_properties_chain.map((st, idx) => (
-              <div key={idx} className="p-3.5 rounded-[12px] border border-[#E2E8F0] bg-[#F8FAFC] flex flex-col justify-between">
-                <div>
-                  <span className="text-[12px] font-bold text-[#7C3AED] block">{st.stage}</span>
-                  <p className="text-[12px] text-[#334155] mt-1 font-medium">{st.description}</p>
+        {/* 3 Experimental Question Selection Cards */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
+          {QUESTION_CARDS.map((q) => {
+            const active = questionType === q.id;
+            return (
+              <button
+                key={q.id}
+                type="button"
+                onClick={() => loadQuestionAndAnalyze(q.id, null, undefined)}
+                className={`text-left p-4 rounded-[16px] border transition-all cursor-pointer flex flex-col justify-between ${
+                  active
+                    ? "border-[#2563EB] bg-[#EFF6FF]/70 ring-2 ring-[#BFDBFE] shadow-sm"
+                    : "border-[#E2E8F0] bg-[#F8FAFC] hover:bg-white hover:border-[#CBD5E1]"
+                }`}
+              >
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span
+                      className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                        active ? "bg-[#2563EB] text-white" : "bg-[#E2E8F0] text-[#475569]"
+                      }`}
+                    >
+                      {q.badge}
+                    </span>
+                    {active && <CheckCircle2 className="w-4 h-4 text-[#2563EB]" />}
+                  </div>
+                  <div className="text-[14px] font-bold text-[#191F28] leading-snug pt-1">{q.title}</div>
+                  <p className="text-[12px] text-[#475569] leading-relaxed">{q.criteria}</p>
                 </div>
-                <span className="text-[11px] font-semibold text-[#64748B] mt-2 block border-t border-[#E2E8F0] pt-1">
-                  데이터: {st.data_source}
-                </span>
+                <div className="mt-3 pt-2 border-t border-[#E2E8F0] text-[11px] text-[#1E40AF] font-medium">
+                  <strong>표시 항목:</strong> {q.displayFocus}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Baseline Specimen Selector & Candidate Comparison Table */}
+        {candEval && (
+          <div className="space-y-4 pt-2">
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-[#F8FAFC] p-3.5 rounded-[14px] border border-[#E2E8F0]">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <span className="text-[13px] font-bold text-[#1E293B]">기준 시편 (Baseline Control):</span>
+                <select
+                  value={baselineProjectId || ""}
+                  onChange={(e) => loadQuestionAndAnalyze(questionType, e.target.value, undefined)}
+                  className="px-3 py-1.5 rounded-[10px] border border-[#CBD5E1] bg-white text-[13px] font-semibold text-[#0F172A]"
+                >
+                  {[...(candEval.eligible_candidates || []), ...(candEval.excluded_candidates || [])].map((c: any) => (
+                    <option key={c.project_id} value={c.project_id}>
+                      {c.sample_name} ({c.experiment_meta?.base_matrix || "모재 미기재"})
+                    </option>
+                  ))}
+                </select>
               </div>
-            ))}
+              <div className="text-[12px] text-[#475569]">
+                비교 가능 후보 <strong className="text-[#1D4ED8]">{candEval.eligible_candidates?.length || 0}종</strong> ·
+                조건 불일치/무관 제외 <strong className="text-[#DC2626]">{candEval.excluded_candidates?.length || 0}종</strong>
+              </div>
+            </div>
+
+            {/* Empty Comparison State Warning if <= 1 eligible */}
+            {candEval.empty_state_reason && (
+              <div className="p-4 rounded-[14px] bg-[#FEF3C7] border border-[#FDE68A] text-[#92400E] text-[13px] flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-[#D97706]" />
+                <div className="space-y-1">
+                  <div className="font-bold">적합한 비교 후보가 부족합니다 (빈 비교 상태 안내)</div>
+                  <p>{candEval.empty_state_reason}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Eligible Candidates Condition Verification Table */}
+            <div className="overflow-x-auto rounded-[14px] border border-[#E2E8F0]">
+              <table className="w-full text-left border-collapse text-[12px]">
+                <thead className="bg-[#F8FAFC] text-[#475569] border-b border-[#E2E8F0]">
+                  <tr>
+                    <th className="py-2.5 px-3 font-bold">비교 포함</th>
+                    <th className="py-2.5 px-3 font-bold">시편명 및 데이터 구분</th>
+                    <th className="py-2.5 px-3 font-bold">모재 · 명목조성 · 도펀트 · 공정</th>
+                    <th className="py-2.5 px-3 font-bold">같은 조건 (통제 변수)</th>
+                    <th className="py-2.5 px-3 font-bold">바뀐 조건 (실험 변수)</th>
+                    <th className="py-2.5 px-3 font-bold">다중 변수 교란 / 확인 필요 조건</th>
+                    <th className="py-2.5 px-3 font-bold text-right">메타데이터 보완</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E2E8F0]">
+                  {(candEval.eligible_candidates || []).map((cand: any) => {
+                    const isSelected = currentSlotsInput.some((s: any) => s.project_id === cand.project_id);
+                    const m: ExperimentMeta = cand.experiment_meta || {};
+                    const ev = cand.comparison_eval || {};
+                    const warnings: string[] = [
+                      ...(ev.confounded_warnings || []),
+                      ...(ev.needs_check_conditions || []),
+                    ];
+                    return (
+                      <tr
+                        key={cand.project_id}
+                        className={isSelected ? "bg-[#EFF6FF]/40" : "bg-white hover:bg-[#F8FAFC]"}
+                      >
+                        <td className="py-2.5 px-3">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => handleToggleCandidateInSlots(cand.project_id)}
+                            className="w-4 h-4 accent-[#2563EB] cursor-pointer"
+                          />
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="font-bold text-[#191F28]">{cand.sample_name}</div>
+                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                            <span
+                              className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                cand.is_synthetic_demo
+                                  ? "bg-[#FEF3C7] text-[#B45309]"
+                                  : "bg-[#DCFCE7] text-[#15803D]"
+                              }`}
+                            >
+                              {cand.is_synthetic_demo ? "합성/예시 시편" : "실제 업로드 시편"}
+                            </span>
+                            {cand.is_Baseline && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#1E40AF] text-white">
+                                기준 시편
+                              </span>
+                            )}
+                            {m.replicate_id && (
+                              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#F1F5F9] text-[#475569]">
+                                {m.replicate_id}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 text-[#334155]">
+                          <div>
+                            <strong>모재:</strong> {m.base_matrix || "미기재"} ({m.nominal_composition || "-"})
+                          </div>
+                          <div>
+                            <strong>도펀트:</strong>{" "}
+                            {m.dopant_element
+                              ? `${m.dopant_element} ${m.dopant_amount ?? "?"} ${m.dopant_unit || ""}`
+                              : "무도핑 (0)"}
+                          </div>
+                          <div>
+                            <strong>공정:</strong> {m.process_method || "-"} ·{" "}
+                            {m.process_temp_c !== null ? `${m.process_temp_c} °C` : "온도 미기재"} ·{" "}
+                            {m.process_time_h !== null ? `${m.process_time_h} h` : "시간 미기재"} ·{" "}
+                            {m.atmosphere || "분위기 미기재"}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="flex flex-wrap gap-1">
+                            {(ev.same_conditions || []).map((sc: string, i: number) => (
+                              <span
+                                key={i}
+                                className="px-2 py-0.5 rounded bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] text-[11px]"
+                              >
+                                {sc}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="flex flex-wrap gap-1">
+                            {(ev.changed_conditions || []).map((cc: string, i: number) => (
+                              <span
+                                key={i}
+                                className="px-2 py-0.5 rounded bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE] text-[11px] font-semibold"
+                              >
+                                {cc}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          {warnings.length > 0 ? (
+                            <div className="space-y-1">
+                              {warnings.map((w: string, i: number) => (
+                                <div
+                                  key={i}
+                                  className="p-1.5 rounded bg-[#FEF3C7] border border-[#FDE68A] text-[#92400E] text-[11px] leading-snug"
+                                >
+                                  ⚠️ {w}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-[#059669] font-semibold text-[11px]">✓ 단일 변수 통제 확인됨</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => openMetadataEditor(cand)}
+                            className="px-2.5 py-1 rounded-[8px] border border-[#CBD5E1] bg-white hover:bg-[#F1F5F9] text-[#334155] text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            조건 편집
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Excluded Unrelated / Mismatched Specimens Accordion */}
+            {(candEval.excluded_candidates || []).length > 0 && (
+              <details className="rounded-[12px] border border-[#E2E8F0] bg-[#F8FAFC] p-3 text-[12px]">
+                <summary className="font-bold text-[#475569] cursor-pointer">
+                  기본 비교 후보에서 제외된 시편 ({candEval.excluded_candidates.length}종) — 무관한 모재 또는 실험 질문 조건 불일치 사유 보기
+                </summary>
+                <div className="mt-2.5 space-y-1.5 pt-2 border-t border-[#E2E8F0]">
+                  {candEval.excluded_candidates.map((ex: any) => (
+                    <div
+                      key={ex.project_id}
+                      className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 p-2 rounded bg-white border border-[#E2E8F0]"
+                    >
+                      <div>
+                        <strong className="text-[#1E293B]">{ex.sample_name}</strong>{" "}
+                        <span className="text-[#DC2626] font-medium ml-1">
+                          — {ex.comparison_eval?.exclusion_reason}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openMetadataEditor(ex)}
+                        className="px-2 py-1 rounded border border-[#CBD5E1] text-[11px] text-[#475569] hover:bg-[#F1F5F9] shrink-0 cursor-pointer"
+                      >
+                        메타데이터 확인/보완
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* =====================================================================
+          INLINE METADATA SUPPLEMENTATION MODAL
+         ===================================================================== */}
+      {editingMetaProjectId && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-white rounded-[20px] max-w-xl w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
+              <h3 className="text-[16px] font-bold text-[#191F28]">
+                시편 실험 설계 메타데이터 확인 및 보완
+              </h3>
+              <button
+                type="button"
+                onClick={() => setEditingMetaProjectId(null)}
+                className="p-1 rounded hover:bg-[#F1F5F9] text-[#64748B] cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[12px]">
+              <div className="sm:col-span-2">
+                <label className="font-bold text-[#334155] block mb-1">시편명 (Sample Name)</label>
+                <input
+                  type="text"
+                  value={editingSampleName}
+                  onChange={(e) => setEditingSampleName(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-[8px] border border-[#CBD5E1]"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-[#334155] block mb-1">모재 (Base Matrix, 예: TiO2, NbFeSb)</label>
+                <input
+                  type="text"
+                  value={editingMetaForm.base_matrix}
+                  onChange={(e) => setEditingMetaForm({ ...editingMetaForm, base_matrix: e.target.value })}
+                  className="w-full px-3 py-1.5 rounded-[8px] border border-[#CBD5E1]"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-[#334155] block mb-1">명목 조성 (Nominal Composition)</label>
+                <input
+                  type="text"
+                  value={editingMetaForm.nominal_composition}
+                  onChange={(e) => setEditingMetaForm({ ...editingMetaForm, nominal_composition: e.target.value })}
+                  className="w-full px-3 py-1.5 rounded-[8px] border border-[#CBD5E1]"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-[#334155] block mb-1">도펀트 원소 (무도핑 시 비움)</label>
+                <input
+                  type="text"
+                  placeholder="예: Nb, Fe, Ti"
+                  value={editingMetaForm.dopant_element}
+                  onChange={(e) => setEditingMetaForm({ ...editingMetaForm, dopant_element: e.target.value })}
+                  className="w-full px-3 py-1.5 rounded-[8px] border border-[#CBD5E1]"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="font-bold text-[#334155] block mb-1">도펀트 함량</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={editingMetaForm.dopant_amount ?? ""}
+                    onChange={(e) =>
+                      setEditingMetaForm({
+                        ...editingMetaForm,
+                        dopant_amount: e.target.value === "" ? null : Number(e.target.value),
+                      })
+                    }
+                    className="w-full px-2.5 py-1.5 rounded-[8px] border border-[#CBD5E1]"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-[#334155] block mb-1">함량 단위</label>
+                  <select
+                    value={editingMetaForm.dopant_unit}
+                    onChange={(e) => setEditingMetaForm({ ...editingMetaForm, dopant_unit: e.target.value })}
+                    className="w-full px-2 py-1.5 rounded-[8px] border border-[#CBD5E1] bg-white"
+                  >
+                    <option value="at%">at%</option>
+                    <option value="wt%">wt%</option>
+                    <option value="mol%">mol%</option>
+                    <option value="stoich_x">화학량론 x</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="font-bold text-[#334155] block mb-1">열처리/소결 온도 (°C)</label>
+                <input
+                  type="number"
+                  value={editingMetaForm.process_temp_c ?? ""}
+                  onChange={(e) =>
+                    setEditingMetaForm({
+                      ...editingMetaForm,
+                      process_temp_c: e.target.value === "" ? null : Number(e.target.value),
+                    })
+                  }
+                  className="w-full px-3 py-1.5 rounded-[8px] border border-[#CBD5E1]"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-[#334155] block mb-1">유지 시간 (h)</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  value={editingMetaForm.process_time_h ?? ""}
+                  onChange={(e) =>
+                    setEditingMetaForm({
+                      ...editingMetaForm,
+                      process_time_h: e.target.value === "" ? null : Number(e.target.value),
+                    })
+                  }
+                  className="w-full px-3 py-1.5 rounded-[8px] border border-[#CBD5E1]"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-[#334155] block mb-1">분위기 (Atmosphere)</label>
+                <input
+                  type="text"
+                  placeholder="Air, Ar, Vacuum 등"
+                  value={editingMetaForm.atmosphere}
+                  onChange={(e) => setEditingMetaForm({ ...editingMetaForm, atmosphere: e.target.value })}
+                  className="w-full px-3 py-1.5 rounded-[8px] border border-[#CBD5E1]"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-[#334155] block mb-1">공정 방법 / 반복시편 ID</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="하소, SPS 등"
+                    value={editingMetaForm.process_method}
+                    onChange={(e) => setEditingMetaForm({ ...editingMetaForm, process_method: e.target.value })}
+                    className="w-full px-2.5 py-1.5 rounded-[8px] border border-[#CBD5E1]"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Rep-1"
+                    value={editingMetaForm.replicate_id}
+                    onChange={(e) => setEditingMetaForm({ ...editingMetaForm, replicate_id: e.target.value })}
+                    className="w-full px-2.5 py-1.5 rounded-[8px] border border-[#CBD5E1]"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-[#E2E8F0]">
+              <button
+                type="button"
+                onClick={() => setEditingMetaProjectId(null)}
+                className="px-4 py-2 rounded-[10px] border border-[#CBD5E1] text-[12px] font-semibold text-[#475569] cursor-pointer"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                disabled={savingMeta}
+                onClick={handleSaveMetadata}
+                className="px-4 py-2 rounded-[10px] bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-[12px] font-bold cursor-pointer"
+              >
+                {savingMeta ? "저장 중..." : "저장 및 비교군 재평가"}
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Multi-Specimen Microstructure & Diffraction Parallel Analysis Section */}
-      <div className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-5">
+      {/* =====================================================================
+          STAGE 2: 시편별 측정자료 매핑 (순서 재정렬 A<->B 및 대표 SEM 시야 A1/A2 선택)
+         ===================================================================== */}
+      <div className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-4">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-[#E2E8F0] pb-3">
           <div>
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 rounded-[8px] bg-[#1E40AF] text-white">
-                <Layers className="w-4 h-4" />
+            <span className="text-[11px] font-bold text-[#7C3AED] uppercase tracking-wider">STEP 2 · SPECIMEN-TO-MEASUREMENT & FOV BINDING</span>
+            <h3 className="text-[17px] font-bold text-[#191F28] mt-0.5">
+              2. 비교 열(Column) 순서 재정렬 및 시편별 XRD 측정 · SEM 대표 시야(FOV) 지정
+            </h3>
+          </div>
+          <span className="text-[12px] text-[#64748B]">
+            순서 변경(A↔B) 및 대표 시야(A1↔A2) 변경 시 그래프·SEM 카드·새로고침·내보내기(PDF/PNG/CSV/JSON)에 즉시 동기화됩니다.
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {activeSlots.map((sl: any, idx: number) => {
+            const xrdInfo = sl.selected_xrd;
+            const semInfo = sl.selected_sem || {};
+            const semFiles: any[] = sl.available_sem_files || [];
+            const xrdRuns: any[] = sl.available_xrd_runs || [];
+            return (
+              <div
+                key={sl.slot_id}
+                className="p-4 rounded-[16px] border border-[#CBD5E1] bg-[#F8FAFC] flex flex-col justify-between space-y-3"
+              >
+                <div className="space-y-2">
+                  {/* Reorder & Slot Header */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className="w-6 h-6 rounded-full text-white text-[12px] font-bold flex items-center justify-center shrink-0"
+                        style={{ backgroundColor: sl.color || "#1D4ED8" }}
+                      >
+                        {sl.slot_index}
+                      </span>
+                      <span className="text-[14px] font-bold text-[#191F28] truncate" title={sl.sample_name}>
+                        {sl.sample_name}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        disabled={idx === 0 || compLoading}
+                        onClick={() => handleMoveSlot(idx, -1)}
+                        className="p-1.5 rounded-[8px] border border-[#CBD5E1] bg-white hover:bg-[#EFF6FF] disabled:opacity-40 cursor-pointer"
+                        title="앞 순서로 이동"
+                      >
+                        <ArrowLeft className="w-3.5 h-3.5 text-[#1E293B]" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === activeSlots.length - 1 || compLoading}
+                        onClick={() => handleMoveSlot(idx, 1)}
+                        className="p-1.5 rounded-[8px] border border-[#CBD5E1] bg-white hover:bg-[#EFF6FF] disabled:opacity-40 cursor-pointer"
+                        title="뒤 순서로 이동"
+                      >
+                        <ArrowRight className="w-3.5 h-3.5 text-[#1E293B]" />
+                      </button>
+                      {activeSlots.length > 1 && (
+                        <button
+                          type="button"
+                          disabled={compLoading}
+                          onClick={() => handleRemoveSlot(idx)}
+                          className="p-1.5 rounded-[8px] border border-[#FECACA] bg-white hover:bg-[#FEF2F2] text-[#DC2626] cursor-pointer"
+                          title="비교 열에서 제외"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="text-[11px] text-[#475569] bg-white px-2.5 py-1.5 rounded-[8px] border border-[#E2E8F0]">
+                    <strong>조건 요약:</strong> {sl.condition_comparison?.summary_sentence}
+                  </div>
+
+                  {/* XRD Measurement Selector */}
+                  <div className="p-2.5 rounded-[10px] bg-white border border-[#E2E8F0] space-y-1 text-[12px]">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-[#1E40AF] flex items-center gap-1">
+                        <Activity className="w-3.5 h-3.5" />
+                        선택된 XRD 측정
+                      </span>
+                      {xrdRuns.length > 1 && (
+                        <select
+                          value={xrdInfo?.run_id || ""}
+                          onChange={(e) => handleSelectXrdRun(idx, e.target.value)}
+                          className="text-[11px] border border-[#CBD5E1] rounded px-1.5 py-0.5 bg-[#F8FAFC]"
+                        >
+                          {xrdRuns.map((r: any) => (
+                            <option key={r.run_id} value={r.run_id}>
+                              Run #{r.run_number}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                    {xrdInfo ? (
+                      <div className="text-[11px] text-[#334155] space-y-0.5">
+                        <div>
+                          파일: <strong>{xrdInfo.original_filename}</strong> (Run #{xrdInfo.run_number})
+                        </div>
+                        <div>
+                          조건: {xrdInfo.xray_source} · 범위 {xrdInfo.two_theta_min.toFixed(1)}°~{xrdInfo.two_theta_max.toFixed(1)}°
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-[#DC2626]">업로드된 XRD 측정 없음</div>
+                    )}
+                  </div>
+
+                  {/* SEM Representative Image / FOV Selector */}
+                  <div className="p-2.5 rounded-[10px] bg-white border border-[#E2E8F0] space-y-1.5 text-[12px]">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-[#047857] flex items-center gap-1">
+                        <Microscope className="w-3.5 h-3.5" />
+                        대표 SEM 이미지 / 촬영 시야 선택
+                      </span>
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#ECFDF5] text-[#047857]">
+                        보유 시야 {semFiles.length}장
+                      </span>
+                    </div>
+
+                    {semFiles.length > 0 ? (
+                      <>
+                        <select
+                          value={semInfo.file_id || ""}
+                          onChange={(e) => handleSelectSemFov(idx, e.target.value)}
+                          className="w-full px-2.5 py-1.5 rounded-[8px] border border-[#93C5FD] bg-[#EFF6FF]/40 text-[12px] font-bold text-[#1E293B] cursor-pointer"
+                        >
+                          {semFiles.map((sf: any) => (
+                            <option key={sf.file_id} value={sf.file_id}>
+                              {sf.fov_label} — {sf.original_filename}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="text-[11px] text-[#475569] space-y-0.5">
+                          <div>
+                            원본파일: <code className="font-mono text-[#0F172A]">{semInfo.original_filename}</code> (ID: {semInfo.file_id})
+                          </div>
+                          <div>
+                            모드/배율: <strong>{semInfo.imaging_mode}</strong> · {semInfo.magnification} · SHA: {(semInfo.sha256 || "").slice(0, 10)}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-[11px] text-[#B45309] bg-[#FEF3C7] p-2 rounded-[8px]">
+                        이 시편에 업로드된 SEM 이미지가 없습니다 (대체 이미지 미사용).
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-              <h3 className="text-[17px] font-bold text-[#191F28]">다종 시편 미세조직 및 결정구조 종합 비교 분석</h3>
-              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE]">
-                한 눈에 보는 결정구조(XRD) & 미세조직(SEM)
-              </span>
-            </div>
-            <p className="text-[13px] text-[#64748B] mt-1">
-              회절 피크(XRD)와 전자현미경 미세조직(SEM)을 나란히 대조하고, 다종 시편을 수직 적층(Stacked) 회절선과 병렬 이미지 그리드로 비교합니다.
+            );
+          })}
+        </div>
+      </div>
+
+      {/* =====================================================================
+          STAGE 3: XRD 세로 오프셋 중첩 그래프 & 피크·(hkl)·이차상 근거·시편 간 변화 표
+         ===================================================================== */}
+      <div ref={xrdSectionRef} className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-5">
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3 border-b border-[#E2E8F0] pb-3">
+          <div>
+            <span className="text-[11px] font-bold text-[#1D4ED8] uppercase tracking-wider">
+              STEP 3 · STACKED XRD DIFFRACTOGRAMS & PHASE / REFLECTION EVIDENCE
+            </span>
+            <h3 className="text-[17px] font-bold text-[#191F28] mt-0.5">
+              3. XRD 세로 오프셋 중첩 그래프 및 피크 · (hkl) · 이차상 후보 검증
+            </h3>
+            <p className="text-[12px] text-[#64748B] mt-0.5">
+              참조 반사와 대응되는 주요 피크에만 (hkl)을 표기하며, 마커(● 주상 / ◆ 다중반사 이차상 후보 / △ 단일 약피크 보류 / ? 미할당)를 클릭하면 아래 피크 표와 함께 강조됩니다.
             </p>
           </div>
 
-          <div className="flex items-center gap-1.5 p-1 bg-[#F1F5F9] rounded-[10px] border border-[#CBD5E1]">
-            <button
-              type="button"
-              onClick={() => setXrdStackMode("single")}
-              className={`px-3 py-1 rounded-[8px] text-[12px] font-semibold transition cursor-pointer ${
-                xrdStackMode === "single"
-                  ? "bg-white text-[#1E40AF] shadow-sm font-bold"
-                  : "text-[#64748B] hover:text-[#1E293B]"
-              }`}
+          {/* Normalization, Offset & Raw Overlay Controls */}
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={normMode}
+              onChange={(e) => {
+                const nextM = e.target.value as "max_100" | "raw";
+                setNormMode(nextM);
+                loadQuestionAndAnalyze(questionType, baselineProjectId, currentSlotsInput, nextM, offsetStep);
+              }}
+              className="px-3 py-1.5 rounded-[10px] border border-[#CBD5E1] bg-[#F8FAFC] text-[12px] font-semibold text-[#1E293B]"
             >
-              단일 패턴 확대
-            </button>
-            <button
-              type="button"
-              onClick={() => setXrdStackMode("stacked")}
-              className={`px-3 py-1 rounded-[8px] text-[12px] font-semibold transition cursor-pointer ${
-                xrdStackMode === "stacked"
-                  ? "bg-[#1E40AF] text-white shadow-sm font-bold"
-                  : "text-[#64748B] hover:text-[#1E293B]"
-              }`}
-            >
-              다종 시편 Stacked 오프셋 비교
-            </button>
-          </div>
-        </div>
+              <option value="max_100">정규화: 배경보정 최대 피크 = 100</option>
+              <option value="raw">원시 강도: 배경보정 Counts (비정규화)</option>
+            </select>
 
-        {/* 2-Column Grid: Left XRD Diffractogram, Right Parallel SEM Images */}
-        <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-          {/* Left Column: XRD Diffractogram */}
-          <div className="xl:col-span-7 bg-[#F8FAFC] rounded-[16px] p-4 border border-[#E2E8F0] space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Activity className="w-4 h-4 text-[#2563EB]" />
-                <h4 className="text-[14px] font-bold text-[#1E293B]">
-                  {xrdStackMode === "stacked" ? "다종 시편 Stacked 회절 패턴" : "실측 XRD 회절 패턴"}
-                </h4>
-              </div>
-              <span className="text-[11px] font-semibold text-[#64748B]">
-                결정자 크기 D = <strong>{crystalliteNm.toFixed(1)} nm</strong> (Scherrer)
-              </span>
-            </div>
-
-            <div className="rounded-[12px] border border-[#E5E8EB] bg-white overflow-hidden p-1 shadow-sm">
-              <PlotlyChart
-                data={xrdPlotTraces}
-                layout={xrdPlotLayout}
-                config={{ responsive: true }}
-                style={{ width: "100%", height: "350px" }}
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] border border-[#CBD5E1] bg-[#F8FAFC] text-[12px]">
+              <span className="font-semibold text-[#475569]">오프셋:</span>
+              <input
+                type="number"
+                step="15"
+                min="0"
+                max="500"
+                value={offsetStep}
+                onChange={(e) => {
+                  const val = Math.max(0, Number(e.target.value));
+                  setOffsetStep(val);
+                }}
+                onBlur={() => loadQuestionAndAnalyze(questionType, baselineProjectId, currentSlotsInput, normMode, offsetStep)}
+                className="w-16 px-1.5 py-0.5 rounded border border-[#CBD5E1] bg-white text-center font-bold"
               />
             </div>
 
-            <div className="flex flex-wrap items-center justify-between text-[11px] text-[#475569] bg-white p-2.5 rounded-[10px] border border-[#E2E8F0]">
-              <div>
-                <strong>주요 회절선 (Bragg Peaks):</strong> (111) 26.0° · (200) 30.1° · (220) 43.1° · (311) 51.0° · (400) 62.7°
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] border border-[#CBD5E1] bg-[#F8FAFC] text-[12px] font-semibold text-[#334155] cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showRawAndBgOverlay}
+                onChange={(e) => setShowRawAndBgOverlay(e.target.checked)}
+              />
+              원자료(Raw)·배경선 겹쳐 보기
+            </label>
+
+            {twoThetaZoomWindow && (
+              <button
+                type="button"
+                onClick={() => setTwoThetaZoomWindow(null)}
+                className="px-2.5 py-1.5 rounded-[10px] bg-[#EFF6FF] text-[#1D4ED8] text-[12px] font-bold cursor-pointer"
+              >
+                전체 2θ 범위 복원
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Normalization & No-Mass-Fraction Scientific Disclaimer */}
+        <div className="p-3 rounded-[12px] bg-[#FFFBEB] border border-[#FDE68A] text-[12px] text-[#92400E] flex items-center justify-between gap-2 flex-wrap">
+          <span>
+            <strong>정규화 및 오프셋 기준:</strong> {compData?.normalization_info?.mode_label} (세로 오프셋 간격: {offsetStep}).{" "}
+            {compData?.normalization_info?.mass_fraction_warning}
+          </span>
+          <span className="text-[11px] font-bold bg-white px-2 py-0.5 rounded border border-[#FDE68A]">
+            마커 범례: ● 주상 | ◆ 이차상 후보(다중반사) | △ 단일 약피크(미확정) | ? 미할당 피크
+          </span>
+        </div>
+
+        {/* Main Interactive Stacked XRD Chart */}
+        <div className="rounded-[16px] border border-[#CBD5E1] bg-white p-2 shadow-sm">
+          <PlotlyChart
+            data={plotlyTraces}
+            layout={plotlyLayout}
+            config={{ responsive: true }}
+            style={{ width: "100%", height: `${Math.max(420, activeSlots.length * 115 + 180)}px` }}
+            onPointClick={(pt: any) => {
+              if (pt?.customdata) {
+                setSelectedPeakUid(String(pt.customdata));
+              }
+            }}
+          />
+        </div>
+
+        {/* Selected Peak Highlight Banner */}
+        {selectedPeakObj && (
+          <div className="p-4 rounded-[14px] bg-[#EFF6FF] border-2 border-[#2563EB] space-y-2 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div className="text-[14px] font-bold text-[#1E3A8A] flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-[#2563EB]" />
+                선택된 피크 정밀 대조: [{selectedPeakObj.slot_index}] {selectedPeakObj.sample_name} — {selectedPeakObj.peak_id}
               </div>
-              <div className="text-[#2563EB] font-bold">
-                Cubic {spaceGroup} 공간군 피팅 일치율 99.4%
+              <button
+                type="button"
+                onClick={() => setSelectedPeakUid(null)}
+                className="text-[12px] text-[#475569] hover:text-[#0F172A] font-semibold cursor-pointer"
+              >
+                선택 해제 ✕
+              </button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5 text-[12px]">
+              <div className="bg-white p-2.5 rounded-[10px] border border-[#BFDBFE]">
+                <span className="text-[#64748B] block text-[11px]">실측 위치 2θ</span>
+                <strong className="text-[#0F172A] text-[13px]">{selectedPeakObj.two_theta}°</strong>
+              </div>
+              <div className="bg-white p-2.5 rounded-[10px] border border-[#BFDBFE]">
+                <span className="text-[#64748B] block text-[11px]">참조 위치 / Δ2θ</span>
+                <strong className="text-[#1D4ED8] text-[13px]">
+                  {selectedPeakObj.ref_two_theta ? `${selectedPeakObj.ref_two_theta}° (${selectedPeakObj.delta_ref_deg > 0 ? "+" : ""}${selectedPeakObj.delta_ref_deg}°)` : "미정합"}
+                </strong>
+              </div>
+              <div className="bg-white p-2.5 rounded-[10px] border border-[#BFDBFE]">
+                <span className="text-[#64748B] block text-[11px]">면간격 d / FWHM</span>
+                <strong className="text-[#0F172A] text-[13px]">
+                  {selectedPeakObj.d_spacing_A ? `${selectedPeakObj.d_spacing_A} Å` : "-"} / {selectedPeakObj.fwhm_deg ?? "-"}°
+                </strong>
+              </div>
+              <div className="bg-white p-2.5 rounded-[10px] border border-[#BFDBFE]">
+                <span className="text-[#64748B] block text-[11px]">적분 면적 / 상대강도</span>
+                <strong className="text-[#0F172A] text-[13px]">
+                  {selectedPeakObj.area ?? "-"} ({selectedPeakObj.rel_intensity_pct}%)
+                </strong>
+              </div>
+              <div className="bg-white p-2.5 rounded-[10px] border border-[#BFDBFE] sm:col-span-2">
+                <span className="text-[#64748B] block text-[11px]">상 후보 및 밀러 지수 (hkl)</span>
+                <strong className="text-[#1E40AF] text-[13px]">
+                  {selectedPeakObj.marker_label} {selectedPeakObj.assigned_phase}{" "}
+                  {selectedPeakObj.assigned_hkl ? `(${selectedPeakObj.assigned_hkl})` : "(밀러 지수 미부여)"}
+                </strong>
+                <span className="block text-[10px] text-[#64748B]">
+                  참조: {selectedPeakObj.reference_source} ({selectedPeakObj.reference_id})
+                </span>
+              </div>
+              <div className="bg-white p-2.5 rounded-[10px] border border-[#BFDBFE]">
+                <span className="text-[#64748B] block text-[11px]">중첩 · 피팅 안정성</span>
+                <strong
+                  className={`text-[12px] ${
+                    selectedPeakObj.is_overlapping || selectedPeakObj.fit_quality_badge !== "정상 피팅"
+                      ? "text-[#D97706]"
+                      : "text-[#059669]"
+                  }`}
+                >
+                  {selectedPeakObj.fit_quality_badge}
+                </strong>
               </div>
             </div>
           </div>
+        )}
 
-          {/* Right Column: Parallel SEM Microstructure Comparison */}
-          <div className="xl:col-span-5 bg-[#F8FAFC] rounded-[16px] p-4 border border-[#E2E8F0] space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Microscope className="w-4 h-4 text-[#059669]" />
-                <h4 className="text-[14px] font-bold text-[#1E293B]">SEM 미세조직 병렬 비교 (Microstructure)</h4>
-              </div>
-              <span className="text-[11px] font-semibold text-[#64748B]">
-                비교 시편 <strong>{semSpecimens.length}종</strong>
-              </span>
-            </div>
-
-            {/* Parallel Specimen Cards Grid */}
-            <div className="space-y-3">
-              {semSpecimens.map((spec, idx) => (
-                <div
-                  key={spec.id}
-                  onClick={() => setActiveSemIdx(idx)}
-                  className={`p-3 rounded-[12px] border transition-all cursor-pointer flex items-center gap-3 bg-white ${
-                    activeSemIdx === idx
-                      ? "border-[#2563EB] ring-2 ring-[#BFDBFE] shadow-sm"
-                      : "border-[#E2E8F0] hover:border-[#CBD5E1]"
-                  }`}
-                >
-                  <div className="relative w-20 h-20 rounded-[8px] overflow-hidden bg-[#1E293B] shrink-0 border border-[#CBD5E1] flex items-center justify-center">
-                    <img
-                      src={spec.imgSrc}
-                      alt={spec.name}
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src =
-                          "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'><rect width='80' height='80' fill='%231E293B'/><polygon points='10,15 35,10 50,28 30,35 15,30' fill='%23475569' stroke='%2394A3B8' stroke-width='1.5'/><polygon points='35,10 70,12 65,35 50,28' fill='%23334155' stroke='%2394A3B8' stroke-width='1.5'/><polygon points='30,35 50,28 55,55 25,60' fill='%2364748B' stroke='%2394A3B8' stroke-width='1.5'/><polygon points='50,28 65,35 75,50 55,55' fill='%23475569' stroke='%2394A3B8' stroke-width='1.5'/><polygon points='15,30 30,35 25,60 10,50' fill='%23334155' stroke='%2394A3B8' stroke-width='1.5'/><polygon points='25,60 55,55 50,75 20,72' fill='%23475569' stroke='%2394A3B8' stroke-width='1.5'/><line x1='10' y1='73' x2='40' y2='73' stroke='white' stroke-width='2'/><text x='12' y='70' fill='white' font-size='7' font-family='sans-serif' font-weight='bold'>2 µm</text></svg>";
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSemZoomModal(spec.imgSrc);
-                      }}
-                      className="absolute bottom-1 right-1 p-1 rounded bg-black/60 text-white hover:bg-black transition cursor-pointer"
-                      title="확대 보기"
-                    >
-                      <Maximize2 className="w-3 h-3" />
-                    </button>
+        {/* Replicate Deviation Summary (for Dopant Amount / Replicate Series) */}
+        {replicateDeviations.length > 0 && (
+          <div className="p-4 rounded-[14px] bg-[#F0FDF4] border border-[#BBF7D0] space-y-2">
+            <h4 className="text-[13px] font-bold text-[#065F46]">
+              📊 동일 함량·조건 반복 시편 간 편차 (Replicate Reproducibility Summary)
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[12px]">
+              {replicateDeviations.map((rep: any, rIdx: number) => (
+                <div key={rIdx} className="p-3 bg-white rounded-[10px] border border-[#A7F3D0] space-y-1">
+                  <div className="font-bold text-[#047857]">
+                    조건: {rep.condition_label} (반복 시편 N={rep.n_replicates}: {rep.specimen_names.join(", ")})
                   </div>
-
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="text-[13px] font-bold text-[#191F28] truncate">{spec.name}</span>
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                        idx === 0 ? "bg-[#EDE9FE] text-[#7C3AED]" : "bg-[#F1F5F9] text-[#64748B]"
-                      }`}>
-                        {spec.badge}
-                      </span>
-                    </div>
-                    <div className="text-[11px] text-[#64748B] truncate">공정: {spec.condition}</div>
-                    <div className="flex items-center gap-3 text-[11px]">
-                      <span>입경: <strong className="text-[#1E293B]">{spec.grainSize}</strong></span>
-                      <span>기공률: <strong className="text-[#059669]">{spec.porosity}</strong></span>
-                      <span>밀도: <strong className="text-[#2563EB]">{spec.density}</strong></span>
-                    </div>
+                  <div className="text-[#334155]">
+                    • 주상 피크 위치 이동 평균±표준편차:{" "}
+                    <strong>
+                      {rep.shift_mean_deg !== null ? `${rep.shift_mean_deg > 0 ? "+" : ""}${rep.shift_mean_deg}° ± ${rep.shift_std_deg}°` : "-"}
+                    </strong>
+                  </div>
+                  <div className="text-[#334155]">
+                    • XRD Scherrer 결정자 크기 평균±표준편차:{" "}
+                    <strong>
+                      {rep.scherrer_mean_nm !== null ? `${rep.scherrer_mean_nm} ± ${rep.scherrer_std_nm} nm` : "-"}
+                    </strong>
+                  </div>
+                  <div className="text-[#334155]">
+                    • SEM D50 입자 크기 평균±표준편차:{" "}
+                    <strong>
+                      {rep.sem_d50_mean !== null ? `${rep.sem_d50_mean} ± ${rep.sem_d50_std} nm` : "해당 없음"}
+                    </strong>
                   </div>
                 </div>
               ))}
             </div>
-
-            {/* Microstructure Feature Callout */}
-            <div className="p-3 bg-white rounded-[10px] border border-[#E2E8F0] text-[11px] text-[#334155] leading-relaxed space-y-1">
-              <strong className="text-[#059669] block">💡 미세조직-수송물성 교차 시사점:</strong>
-              SPS 소결체(Sample #1)는 조대화 열처리재(Sample #2) 대비 결정립 크기가 2.4 µm로 작아, Petritz 입계 장벽에 의한 캐리어 산란 및 계면 포논 산란(Maxwell-Eucken)을 유도하여 포논 열전도도(κ_L)를 크게 낮추는 데 기여합니다.
-            </div>
           </div>
+        )}
+
+        {/* Sub-Table 3.1: Cross-Specimen Reflection Evolution Table (Δ2θ, ΔFWHM, Out of Range vs Not Detected) */}
+        <div className="space-y-2">
+          <h4 className="text-[14px] font-bold text-[#1E293B]">
+            3.1 시편 간 대응 반사별 피크 이동(Δ2θ) · 선폭(FWHM) 변화 및 출현 여부 비교 표
+          </h4>
+          <p className="text-[12px] text-[#64748B]">
+            각 반사가 시편의 측정 각도 구간 밖인 경우 <strong>‘측정 범위 밖’</strong>으로, 측정 범위 안이나 피크가 검출되지 않은 경우 <strong>‘미검출 (측정 범위 내)’</strong>로 엄격히 구분합니다.
+          </p>
+          <div className="overflow-x-auto rounded-[12px] border border-[#E2E8F0]">
+            <table className="w-full text-left border-collapse text-[12px]">
+              <thead className="bg-[#F8FAFC] text-[#475569] border-b border-[#E2E8F0]">
+                <tr>
+                  <th className="py-2.5 px-3 font-bold">반사 마커 · 귀속 상 (hkl)</th>
+                  <th className="py-2.5 px-3 font-bold">참조 2θ</th>
+                  {activeSlots.map((sl: any) => (
+                    <th key={sl.slot_id} className="py-2.5 px-3 font-bold">
+                      [{sl.slot_index}] {sl.sample_name}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#E2E8F0]">
+                {reflectionEvolution.map((row: any) => (
+                  <tr key={row.reflection_id} className="hover:bg-[#F8FAFC]">
+                    <td className="py-2.5 px-3 font-bold text-[#1E293B]">
+                      {row.marker_label} {row.phase}{" "}
+                      {row.hkl ? <span className="text-[#1D4ED8]">({row.hkl})</span> : <span className="text-[#64748B]">(미할당)</span>}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-[#475569]">
+                      {row.ref_two_theta ? `${row.ref_two_theta.toFixed(2)}°` : `~${row.anchor_two_theta.toFixed(2)}°`}
+                    </td>
+                    {(row.per_specimen || []).map((ps: any) => {
+                      if (ps.status === "detected") {
+                        const isSel = ps.peak_uid === selectedPeakUid;
+                        return (
+                          <td
+                            key={ps.slot_id}
+                            onClick={() => setSelectedPeakUid(ps.peak_uid)}
+                            className={`py-2.5 px-3 cursor-pointer transition ${
+                              isSel ? "bg-[#DBEAFE] font-bold" : "hover:bg-[#EFF6FF]"
+                            }`}
+                          >
+                            <div className="font-mono text-[#0F172A]">
+                              <strong>{ps.two_theta.toFixed(2)}°</strong>{" "}
+                              <span className="text-[#1D4ED8] text-[11px]">
+                                (Δ={ps.delta_vs_baseline_deg > 0 ? "+" : ""}
+                                {ps.delta_vs_baseline_deg.toFixed(2)}°)
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-[#475569]">
+                              FWHM: {ps.fwhm_deg ?? "-"}° · I: {ps.rel_intensity_pct}%
+                            </div>
+                            {ps.fit_quality_badge !== "정상 피팅" && (
+                              <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.2 rounded bg-[#FEF3C7] text-[#B45309]">
+                                {ps.fit_quality_badge}
+                              </span>
+                            )}
+                          </td>
+                        );
+                      }
+                      if (ps.status === "out_of_range") {
+                        return (
+                          <td key={ps.slot_id} className="py-2.5 px-3 bg-[#F1F5F9] text-[#64748B] italic">
+                            <span className="px-2 py-0.5 rounded bg-[#E2E8F0] text-[#475569] text-[11px] font-semibold not-italic">
+                              {ps.status_label}
+                            </span>
+                          </td>
+                        );
+                      }
+                      return (
+                        <td key={ps.slot_id} className="py-2.5 px-3 text-[#94A3B8]">
+                          {ps.status_label}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Sub-Table 3.2: Primary & Secondary Phase Candidate Verification Table */}
+        <div className="space-y-2">
+          <h4 className="text-[14px] font-bold text-[#1E293B]">
+            3.2 시편별 주상 및 이차상 후보 검증 근거 표 (참조 출처 · 다중 반사 정합 · 예상 강반사 누락 · 주상 중첩 검토)
+          </h4>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {activeSlots.map((sl: any) => {
+              const xrd = sl.selected_xrd;
+              if (!xrd) return null;
+              const prim = xrd.primary_phase;
+              const secs: any[] = xrd.secondary_phase_evaluations || [];
+              return (
+                <div key={sl.slot_id} className="p-3.5 rounded-[14px] border border-[#E2E8F0] bg-[#F8FAFC] space-y-2 text-[12px]">
+                  <div className="font-bold text-[#191F28] flex items-center justify-between">
+                    <span>
+                      [{sl.slot_index}] {sl.sample_name}
+                    </span>
+                    <span className="text-[11px] font-mono text-[#475569]">
+                      λ = {xrd.wavelength_A} Å · 범위 {xrd.two_theta_min.toFixed(1)}°~{xrd.two_theta_max.toFixed(1)}°
+                    </span>
+                  </div>
+
+                  {prim ? (
+                    <div className="p-2.5 rounded-[10px] bg-white border border-[#BFDBFE] space-y-0.5">
+                      <div className="font-bold text-[#1E40AF]">
+                        ● 주상 (Primary): {prim.name} ({prim.formula}) [{prim.spacegroup}]
+                      </div>
+                      <div className="text-[11px] text-[#475569]">
+                        참조 출처: {prim.source} (ID: <code>{prim.reference_id}</code>) · 평균 피크 이동 Δ2θ = {prim.shift_deg > 0 ? "+" : ""}
+                        {prim.shift_deg}° · Scherrer D = {xrd.scherrer_mean_nm ? `${xrd.scherrer_mean_nm} nm` : "계산 불가"}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-2.5 rounded-[10px] bg-[#FEF3C7] text-[#92400E]">
+                      주상 후보 정합 미확정 (참조 패턴 부재 또는 신호 부족)
+                    </div>
+                  )}
+
+                  {secs.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {secs.slice(0, 2).map((sec: any, sIdx: number) => (
+                        <div key={sIdx} className="p-2.5 rounded-[10px] bg-white border border-[#E2E8F0] space-y-1">
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <strong className="text-[#0F172A]">
+                              이차상 후보 검토: {sec.name} ({sec.formula}) [{sec.spacegroup}]
+                            </strong>
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                                sec.verdict_code === "supported_multi_reflection"
+                                  ? "bg-[#DCFCE7] text-[#15803D]"
+                                  : "bg-[#FEF3C7] text-[#B45309]"
+                              }`}
+                            >
+                              {sec.verdict_badge}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-[#64748B]">
+                            출처: {sec.source} (ID: <code>{sec.mp_id || sec.phase_id}</code>, λ={sec.wavelength_A} Å)
+                          </div>
+                          <p className="text-[11px] text-[#334155] leading-relaxed">{sec.scientific_rationale}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-[#64748B] pl-1">
+                      주상으로 모든 주요 피크가 설명되며, 유의미한 이차상 후보가 검출되지 않았습니다.
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Sub-Table 3.3: All Detected Peaks Table */}
+        <details className="rounded-[14px] border border-[#E2E8F0] bg-[#F8FAFC] p-3.5" open>
+          <summary className="text-[14px] font-bold text-[#1E293B] cursor-pointer">
+            3.3 전체 검출 피크 상세 표 (위치 2θ · 적분 면적 · 상대 강도 · FWHM · d-spacing · 상 귀속 및 피팅 안정성) — 총 {allPeaksTable.length}개 피크
+          </summary>
+          <div className="mt-3 overflow-x-auto rounded-[10px] border border-[#CBD5E1] bg-white max-h-[360px] overflow-y-auto">
+            <table className="w-full text-left border-collapse text-[12px]">
+              <thead className="bg-[#F1F5F9] text-[#475569] sticky top-0">
+                <tr>
+                  <th className="py-2 px-2.5 font-bold">시편</th>
+                  <th className="py-2 px-2.5 font-bold">피크 ID</th>
+                  <th className="py-2 px-2.5 font-bold">실측 2θ (°)</th>
+                  <th className="py-2 px-2.5 font-bold">참조 2θ / Δ2θ</th>
+                  <th className="py-2 px-2.5 font-bold">d-spacing (Å)</th>
+                  <th className="py-2 px-2.5 font-bold">상대 강도 (%)</th>
+                  <th className="py-2 px-2.5 font-bold">적분 면적</th>
+                  <th className="py-2 px-2.5 font-bold">FWHM (°)</th>
+                  <th className="py-2 px-2.5 font-bold">상 귀속 및 (hkl)</th>
+                  <th className="py-2 px-2.5 font-bold">피팅 안정성 / 중첩</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#E2E8F0]">
+                {allPeaksTable.map((pk: any) => {
+                  const isSel = pk.peak_uid === selectedPeakUid;
+                  return (
+                    <tr
+                      key={pk.peak_uid}
+                      onClick={() => setSelectedPeakUid(pk.peak_uid)}
+                      className={`cursor-pointer transition ${
+                        isSel ? "bg-[#DBEAFE] font-bold" : "hover:bg-[#F8FAFC]"
+                      }`}
+                    >
+                      <td className="py-2 px-2.5">
+                        [{pk.slot_index}] {pk.sample_name.replace("[검증시리즈] ", "")}
+                      </td>
+                      <td className="py-2 px-2.5 font-mono">{pk.peak_id}</td>
+                      <td className="py-2 px-2.5 font-mono font-bold text-[#0F172A]">{pk.two_theta.toFixed(3)}°</td>
+                      <td className="py-2 px-2.5 font-mono text-[#1D4ED8]">
+                        {pk.ref_two_theta ? `${pk.ref_two_theta.toFixed(3)}° (${pk.delta_ref_deg > 0 ? "+" : ""}${pk.delta_ref_deg.toFixed(3)}°)` : "-"}
+                      </td>
+                      <td className="py-2 px-2.5 font-mono">{pk.d_spacing_A ? `${pk.d_spacing_A} Å` : "-"}</td>
+                      <td className="py-2 px-2.5 font-mono">{pk.rel_intensity_pct}%</td>
+                      <td className="py-2 px-2.5 font-mono">{pk.area ?? "-"}</td>
+                      <td className="py-2 px-2.5 font-mono">{pk.fwhm_deg ?? "-"}°</td>
+                      <td className="py-2 px-2.5">
+                        <span className="font-semibold text-[#1E40AF]">
+                          {pk.marker_label} {pk.assigned_phase} {pk.assigned_hkl ? `(${pk.assigned_hkl})` : ""}
+                        </span>
+                      </td>
+                      <td className="py-2 px-2.5">
+                        <span
+                          className={`text-[11px] px-1.5 py-0.5 rounded font-semibold ${
+                            pk.fit_quality_badge === "정상 피팅"
+                              ? "bg-[#ECFDF5] text-[#047857]"
+                              : "bg-[#FEF3C7] text-[#B45309]"
+                          }`}
+                        >
+                          {pk.fit_quality_badge}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </div>
+
+      {/* =====================================================================
+          STAGE 4: 같은 순서의 SEM 병렬 이미지 및 시야(FOV) 비교 (대체 이미지 금지 원칙)
+         ===================================================================== */}
+      <div ref={semSectionRef} className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-5">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-[#E2E8F0] pb-3">
+          <div>
+            <span className="text-[11px] font-bold text-[#059669] uppercase tracking-wider">
+              STEP 4 · PARALLEL SEM MICROSTRUCTURE COMPARISON (SYNCHRONIZED ORDER)
+            </span>
+            <h3 className="text-[17px] font-bold text-[#191F28] mt-0.5">
+              4. XRD 비교 순서와 동기화된 SEM 병렬 원본 이미지 및 정량·정성 비교
+            </h3>
+            <p className="text-[12px] text-[#64748B] mt-0.5">
+              각 시편의 실제 원본에서 생성된 이미지만 표시하며, 이미지가 없거나 로딩에 실패할 경우 다른 시편이나 예시 이미지로 채우지 않고 상태를 명시합니다.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+          {activeSlots.map((sl: any, idx: number) => {
+            const sem = sl.selected_sem || {};
+            const xrd = sl.selected_xrd;
+            const semFiles: any[] = sl.available_sem_files || [];
+            const viewMode = semViewModeBySlot[sl.slot_id] || "raw";
+            const activeImgUrl =
+              viewMode === "overlay" && sem.overlay_image_url ? sem.overlay_image_url : sem.raw_image_url;
+            const fileErrKey = `${sl.project_id}_${sem.file_id}_${viewMode}`;
+            const hasLoadError = Boolean(semLoadErrorByFile[fileErrKey]);
+            const isHighlighted = highlightedSlotId === sl.slot_id;
+            const qm = sem.quant_metrics;
+
+            return (
+              <div
+                key={sl.slot_id}
+                className={`rounded-[18px] border p-4 flex flex-col justify-between space-y-3.5 transition-all ${
+                  isHighlighted
+                    ? "border-[#059669] ring-4 ring-[#A7F3D0] bg-[#ECFDF5]/30"
+                    : "border-[#CBD5E1] bg-[#F8FAFC]"
+                }`}
+              >
+                <div className="space-y-3">
+                  {/* Card Header */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="px-2 py-0.5 rounded text-white text-[11px] font-bold"
+                          style={{ backgroundColor: sl.color || "#059669" }}
+                        >
+                          열 #{sl.slot_index}
+                        </span>
+                        <span className="text-[14px] font-bold text-[#191F28]">{sl.sample_name}</span>
+                      </div>
+                      <div className="text-[11px] text-[#475569] mt-0.5">
+                        {sl.condition_comparison?.summary_sentence}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Multi-FOV Switcher directly on SEM card */}
+                  {semFiles.length > 1 && (
+                    <div className="flex items-center gap-1.5 bg-white p-2 rounded-[10px] border border-[#BFDBFE]">
+                      <span className="text-[11px] font-bold text-[#1E40AF] shrink-0">대표 시야 전환:</span>
+                      <select
+                        value={sem.file_id || ""}
+                        onChange={(e) => handleSelectSemFov(idx, e.target.value)}
+                        className="w-full text-[11px] font-bold text-[#0F172A] bg-transparent cursor-pointer"
+                      >
+                        {semFiles.map((sf: any) => (
+                          <option key={sf.file_id} value={sf.file_id}>
+                            {sf.fov_label} ({sf.original_filename})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Image Container OR Explicit Status Box (NO fallback image!) */}
+                  {sem.has_image && activeImgUrl && !hasLoadError ? (
+                    <div className="space-y-2">
+                      <div className="relative w-full h-56 rounded-[12px] overflow-hidden bg-[#0F172A] border border-[#CBD5E1] flex items-center justify-center">
+                        <img
+                          key={activeImgUrl}
+                          src={activeImgUrl}
+                          alt={`${sl.sample_name} - ${sem.fov_label}`}
+                          className="w-full h-full object-contain"
+                          onError={() =>
+                            setSemLoadErrorByFile((prev) => ({
+                              ...prev,
+                              [fileErrKey]: true,
+                            }))
+                          }
+                        />
+                        <div className="absolute top-2 left-2 flex items-center gap-1">
+                          <span className="px-2 py-0.5 rounded bg-black/75 text-white text-[10px] font-bold">
+                            {sem.imaging_mode} · {sem.magnification}
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-black/75 text-[#A7F3D0] text-[10px] font-mono">
+                            {sem.fov_label}
+                          </span>
+                        </div>
+
+                        <div className="absolute bottom-2 right-2 flex items-center gap-1.5">
+                          {sem.overlay_image_url && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSemViewModeBySlot((prev) => ({
+                                  ...prev,
+                                  [sl.slot_id]: viewMode === "raw" ? "overlay" : "raw",
+                                }))
+                              }
+                              className="px-2 py-1 rounded bg-black/75 hover:bg-black text-white text-[10px] font-bold cursor-pointer"
+                            >
+                              {viewMode === "raw" ? "분할 오버레이 보기" : "원본 영상 보기"}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSemZoomModal({
+                                url: activeImgUrl,
+                                sampleName: sl.sample_name,
+                                fovLabel: sem.fov_label,
+                                filename: sem.original_filename,
+                                scaleSummary: sem.scale_summary,
+                              })
+                            }
+                            className="p-1.5 rounded bg-black/75 hover:bg-black text-white cursor-pointer"
+                            title="원본 확대 보기"
+                          >
+                            <Maximize2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Verifiable File & Scale Caption */}
+                      <div className="p-2.5 rounded-[10px] bg-white border border-[#E2E8F0] text-[11px] text-[#334155] space-y-0.5">
+                        <div className="flex justify-between">
+                          <span className="text-[#64748B]">원본 파일명:</span>
+                          <strong className="font-mono text-[#0F172A]">{sem.original_filename}</strong>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-[#64748B]">선택 시야 / 식별자:</span>
+                          <strong>
+                            {sem.fov_label} (SHA: {(sem.sha256 || "").slice(0, 8)})
+                          </strong>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-[#64748B]">스케일 상태:</span>
+                          <strong className={sem.scale_calibrated ? "text-[#059669]" : "text-[#D97706]"}>
+                            {sem.scale_summary}
+                          </strong>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-full h-56 rounded-[12px] border-2 border-dashed border-[#CBD5E1] bg-white p-5 flex flex-col items-center justify-center text-center space-y-2">
+                      <AlertTriangle className="w-8 h-8 text-[#D97706]" />
+                      <div className="text-[13px] font-bold text-[#1E293B]">
+                        {hasLoadError ? "SEM 원본 이미지 로딩 실패" : "업로드된 SEM 이미지 없음"}
+                      </div>
+                      <p className="text-[11px] text-[#64748B] leading-relaxed max-w-xs">
+                        {hasLoadError
+                          ? `파일(${sem.original_filename})을 불러오지 못했습니다. 다른 시편이나 예시 이미지로 대체하지 않고 상태를 표시합니다.`
+                          : sem.status_message}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Strictly Separated Quantitative Metrics: SEM Particle/Grain Size vs XRD Crystallite Size */}
+                  <div className="p-3 rounded-[12px] bg-white border border-[#E2E8F0] space-y-2 text-[12px]">
+                    <div className="font-bold text-[#1E293B] border-b border-[#F1F5F9] pb-1">
+                      정량 치수 비교 (SEM 입자 크기 vs XRD 결정자 크기 별개 관리)
+                    </div>
+
+                    {qm ? (
+                      <div className="space-y-1 text-[11px] text-[#334155]">
+                        <div className="flex justify-between">
+                          <span className="text-[#047857] font-bold">SEM 실측 중앙 크기 (D50):</span>
+                          <strong className="text-[#0F172A]">
+                            {qm.d50} {qm.unit} (D10: {qm.d10} · D90: {qm.d90} {qm.unit})
+                          </strong>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-[#64748B]">SEM 평균 ± 표준편차:</span>
+                          <strong>
+                            {qm.mean} ± {qm.std} {qm.unit}
+                          </strong>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-[#64748B]">측정 근거 (시야 수 / 대상 수 / 파일):</span>
+                          <strong>
+                            시야 {qm.fov_count}개 · N={qm.sample_count_n}개 · {qm.used_image_filename}
+                          </strong>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-[#B45309] bg-[#FFFBEB] p-2 rounded-[8px]">
+                        <strong>SEM 크기 미산출:</strong>{" "}
+                        {sem.has_image
+                          ? "스케일 보정 또는 분할 품질이 확정되지 않아 근거 없는 크기 수치를 생성하지 않습니다."
+                          : "SEM 이미지가 없어 정량 치수를 산출하지 않습니다."}
+                      </div>
+                    )}
+
+                    <div className="pt-1.5 border-t border-[#F1F5F9] flex justify-between text-[11px]">
+                      <span className="text-[#1D4ED8] font-bold">XRD Scherrer 결정자 크기 (별개 항목):</span>
+                      <strong className="text-[#1E40AF]">
+                        {xrd?.scherrer_mean_nm ? `${xrd.scherrer_mean_nm.toFixed(1)} nm (간섭 산란 도메인)` : "미산출"}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* SEM Image Zoom Modal */}
+      {/* =====================================================================
+          STAGE 5: XRD 단서 기반 동일 시편 SEM 4단계 교차 해석 (근거 링크 포함)
+         ===================================================================== */}
+      <div className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-5">
+        <div className="border-b border-[#E2E8F0] pb-3">
+          <span className="text-[11px] font-bold text-[#7C3AED] uppercase tracking-wider">
+            STEP 5 · 4-STAGE XRD-TO-SEM CROSS-INSTRUMENT INTERPRETATION & EVIDENCE LINKS
+          </span>
+          <h3 className="text-[17px] font-bold text-[#191F28] mt-0.5">
+            5. XRD 단서를 이용한 동일 시편 SEM 4단계 정교화 해석 (관찰 사실 · 가능한 해석 · 추가 확인 구분)
+          </h3>
+          <p className="text-[12px] text-[#64748B] mt-0.5">
+            XRD에서 얻은 단서 → 같은 시편의 SEM에서 확인할 특징 → 실제 관찰 → 해석의 한계 순서로 구성하며, 각 해석에서 해당 XRD 피크 구간과 SEM 원본 시야로 즉시 이동할 수 있습니다.
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          {crossCards.map((card: any) => (
+            <div
+              key={card.slot_id}
+              className="p-5 rounded-[16px] border border-[#CBD5E1] bg-[#F8FAFC] space-y-4"
+            >
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-[#E2E8F0] pb-2.5">
+                <div>
+                  <span className="text-[15px] font-bold text-[#0F172A]">
+                    [{card.slot_index}] {card.sample_name}
+                  </span>
+                  <span className="text-[12px] text-[#475569] ml-2">({card.condition_summary})</span>
+                </div>
+
+                {/* Clickable Evidence Links */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {card.evidence_links?.xrd_link && (
+                    <button
+                      type="button"
+                      onClick={() => handleJumpToXrdEvidence(card.evidence_links.xrd_link)}
+                      className="px-2.5 py-1 rounded-[8px] bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#1D4ED8] border border-[#BFDBFE] text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <Link2 className="w-3 h-3" />
+                      {card.evidence_links.xrd_link.label}
+                    </button>
+                  )}
+                  {card.evidence_links?.sem_link && (
+                    <button
+                      type="button"
+                      onClick={() => handleJumpToSemEvidence(card.evidence_links.sem_link)}
+                      className="px-2.5 py-1 rounded-[8px] bg-[#ECFDF5] hover:bg-[#D1FAE5] text-[#047857] border border-[#A7F3D0] text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <Link2 className="w-3 h-3" />
+                      {card.evidence_links.sem_link.label}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* 4-Step Flow Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-[12px]">
+                <div className="p-3.5 rounded-[12px] bg-white border border-[#BFDBFE] space-y-1">
+                  <span className="text-[11px] font-bold text-[#1D4ED8] block">① XRD에서 얻은 단서</span>
+                  <p className="text-[#1E293B] leading-relaxed">{card.step1_xrd_clue}</p>
+                </div>
+                <div className="p-3.5 rounded-[12px] bg-white border border-[#DDD6FE] space-y-1">
+                  <span className="text-[11px] font-bold text-[#6D28D9] block">② 같은 시편 SEM에서 확인할 특징</span>
+                  <p className="text-[#1E293B] leading-relaxed">{card.step2_sem_target}</p>
+                </div>
+                <div className="p-3.5 rounded-[12px] bg-white border border-[#A7F3D0] space-y-1">
+                  <span className="text-[11px] font-bold text-[#047857] block">③ 실제 SEM 관찰 결과</span>
+                  <p className="text-[#1E293B] leading-relaxed">{card.step3_actual_observation}</p>
+                </div>
+                <div className="p-3.5 rounded-[12px] bg-white border border-[#FDE68A] space-y-1">
+                  <span className="text-[11px] font-bold text-[#B45309] block">④ 해석의 한계 (체적 vs 국소 시야)</span>
+                  <p className="text-[#475569] leading-relaxed">{card.step4_limitations}</p>
+                </div>
+              </div>
+
+              {/* Strictly Separated Fact / Interpretation / Verification Badges */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 text-[12px]">
+                <div className="p-3 rounded-[10px] bg-[#ECFDF5] border border-[#A7F3D0] space-y-1">
+                  <strong className="text-[#065F46] block">✓ 확보된 관찰 사실 (Observed Facts)</strong>
+                  <ul className="list-disc pl-4 space-y-0.5 text-[#064E3B] text-[11px]">
+                    {(card.observed_facts || []).map((f: string, i: number) => (
+                      <li key={i}>{f}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="p-3 rounded-[10px] bg-[#EFF6FF] border border-[#BFDBFE] space-y-1">
+                  <strong className="text-[#1E40AF] block">💡 가능한 해석 (Possible Interpretations)</strong>
+                  <ul className="list-disc pl-4 space-y-0.5 text-[#1E3A8A] text-[11px]">
+                    {(card.possible_interpretations || []).map((ip: string, i: number) => (
+                      <li key={i}>{ip}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="p-3 rounded-[10px] bg-[#FFFBEB] border border-[#FDE68A] space-y-1">
+                  <strong className="text-[#92400E] block">🔬 추가 확인 방법 (Verification Methods)</strong>
+                  <ul className="list-disc pl-4 space-y-0.5 text-[#78350F] text-[11px]">
+                    {(card.verification_methods || []).map((vm: string, i: number) => (
+                      <li key={i}>{vm}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* =====================================================================
+          SEM HIGH-RES ZOOM MODAL
+         ===================================================================== */}
       {semZoomModal && (
         <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
-          <div className="bg-white rounded-[20px] max-w-2xl w-full p-6 space-y-4 shadow-2xl relative">
+          <div className="bg-white rounded-[20px] max-w-3xl w-full p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
-              <h3 className="text-[16px] font-bold text-[#191F28] flex items-center gap-2">
-                <Microscope className="w-5 h-5 text-[#059669]" />
-                SEM 전자현미경 미세조직 고해상도 검사
-              </h3>
+              <div>
+                <h3 className="text-[16px] font-bold text-[#191F28]">
+                  {semZoomModal.sampleName} — {semZoomModal.fovLabel}
+                </h3>
+                <p className="text-[12px] text-[#64748B]">
+                  원본 파일명: {semZoomModal.filename} · {semZoomModal.scaleSummary}
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={() => setSemZoomModal(null)}
@@ -1121,375 +2131,162 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="rounded-[12px] overflow-hidden border border-[#CBD5E1] bg-[#0F172A] flex items-center justify-center min-h-[300px] max-h-[60vh] p-2">
+            <div className="rounded-[12px] overflow-hidden border border-[#CBD5E1] bg-[#0F172A] flex items-center justify-center max-h-[65vh] p-2">
               <img
-                src={semZoomModal}
-                alt="SEM 고해상도 확대"
-                className="max-w-full max-h-[55vh] object-contain rounded"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src =
-                    "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='400' height='300' viewBox='0 0 400 300'><rect width='400' height='300' fill='%231E293B'/><polygon points='40,50 140,30 200,100 120,130 50,110' fill='%23475569' stroke='%2394A3B8' stroke-width='2'/><polygon points='140,30 280,40 260,130 200,100' fill='%23334155' stroke='%2394A3B8' stroke-width='2'/><polygon points='120,130 200,100 220,220 100,230' fill='%2364748B' stroke='%2394A3B8' stroke-width='2'/><polygon points='200,100 260,130 310,200 220,220' fill='%23475569' stroke='%2394A3B8' stroke-width='2'/><polygon points='50,110 120,130 100,230 40,190' fill='%23334155' stroke='%2394A3B8' stroke-width='2'/><polygon points='100,230 220,220 190,285 80,280' fill='%23475569' stroke='%2394A3B8' stroke-width='2'/><line x1='30' y1='275' x2='110' y2='275' stroke='white' stroke-width='3'/><text x='35' y='268' fill='white' font-size='11' font-family='sans-serif' font-weight='bold'>2.4 µm Scale Bar</text></svg>";
-                }}
+                src={semZoomModal.url}
+                alt={semZoomModal.fovLabel}
+                className="max-w-full max-h-[60vh] object-contain"
               />
             </div>
-            <div className="flex justify-between items-center text-[12px] text-[#64748B]">
-              <span>스케일 바 기준 자동 보정됨 (ASTM E112 선형 절단법)</span>
-              <button
-                type="button"
-                onClick={() => setSemZoomModal(null)}
-                className="px-4 py-2 rounded-[10px] bg-[#1E293B] hover:bg-[#0F172A] text-white font-bold cursor-pointer"
-              >
-                닫기
-              </button>
-            </div>
           </div>
         </div>
       )}
 
-      {/* Wiedemann-Franz Law & Cross-Instrument Correlations */}
-      {result && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Pie Chart of Wiedemann-Franz */}
-          {result.wiedemann_franz && (
-            <div className="lg:col-span-5 bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm flex flex-col justify-between">
-              <div>
-                <h4 className="text-[15px] font-bold text-[#191F28] mb-2 flex items-center gap-2">
-                  <Flame className="w-4 h-4 text-[#F59E0B]" />
-                  Wiedemann–Franz Law 열수송 분리
-                </h4>
-                <div className="rounded-[12px] border border-[#E5E8EB] p-1 bg-white">
-                  <PlotlyChart data={pieData} layout={pieLayout} config={{ responsive: true }} style={{ width: "100%", height: "320px" }} />
-                </div>
-              </div>
-
-              <div className="mt-4 p-3.5 bg-[#F8FAFC] rounded-[12px] border border-[#E2E8F0] space-y-1.5 text-[12px]">
-                <div className="flex justify-between">
-                  <span className="text-[#64748B]">전체 열전도도 (κ_total):</span>
-                  <strong className="text-[#1E293B]">{result.wiedemann_franz.total_thermal_conductivity_W_mK} W/m·K</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#64748B]">포논 격자 열전도도 (κ_L):</span>
-                  <strong className="text-[#3B82F6]">
-                    {result.wiedemann_franz.lattice_thermal_conductivity_W_mK} W/m·K ({result.wiedemann_franz.lattice_fraction_pct}%)
-                  </strong>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#64748B]">전자 열전도도 (κ_e):</span>
-                  <strong className="text-[#F59E0B]">
-                    {result.wiedemann_franz.electronic_thermal_conductivity_W_mK} W/m·K ({result.wiedemann_franz.electronic_fraction_pct}%)
-                  </strong>
-                </div>
-                <div className="pt-1.5 border-t border-[#E2E8F0] text-[11px] text-[#64748B]">
-                  * 로렌츠 수 L₀ = 2.44 × 10⁻⁸ W·Ω/K² 기준 (Sommerfeld 한계)
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Cross-Instrument Correlations */}
-          <div className="lg:col-span-7 bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-4">
-            <h4 className="text-[15px] font-bold text-[#191F28] flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-[#7C3AED]" />
-              물리적 상관관계 및 교차 검증 (Cross-Correlation)
-            </h4>
-
-            {result.xrd_sem_correlation && (
-              <div className="p-3.5 rounded-[12px] bg-[#F8FAFC] border border-[#E2E8F0] space-y-1">
-                <span className="text-[12px] font-bold text-[#2563EB] block">
-                  XRD + SEM: 결정립경(Crystallite, {crystalliteNm} nm) vs 입경(Grain, {grainSizeUm} µm)
-                </span>
-                <p className="text-[12px] text-[#334155] leading-relaxed">{result.xrd_sem_correlation.interpretation}</p>
-                <span className="text-[11px] text-[#64748B] block italic">{result.xrd_sem_correlation.conceptual_distinction}</span>
-              </div>
-            )}
-
-            {result.sem_hall_correlation && (
-              <div className="p-3.5 rounded-[12px] bg-[#F8FAFC] border border-[#E2E8F0] space-y-1">
-                <span className="text-[12px] font-bold text-[#7C3AED] block">SEM + Hall: 결정립계 전하 산란 (Petritz 모델)</span>
-                <p className="text-[12px] text-[#334155] leading-relaxed">{result.sem_hall_correlation.scattering_hypothesis}</p>
-                <span className="text-[11px] text-[#64748B] block italic">검증 방안: {result.sem_hall_correlation.test_recommendation}</span>
-              </div>
-            )}
-
-            {result.sem_lfa_correlation && (
-              <div className="p-3.5 rounded-[12px] bg-[#F8FAFC] border border-[#E2E8F0] space-y-1">
-                <span className="text-[12px] font-bold text-[#D97706] block">SEM + LFA: 기공률 및 계면 포논 산란 (Maxwell-Eucken)</span>
-                <p className="text-[12px] text-[#334155] leading-relaxed">{result.sem_lfa_correlation.interpretation}</p>
-                <span className="text-[11px] text-[#64748B] block italic">모델: {result.sem_lfa_correlation.model}</span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Integrated Literature RAG Section */}
+      {/* =====================================================================
+          OPTIONAL: HALL / LFA TRANSPORT & LITERATURE RAG / ASSISTANT SECTION
+         ===================================================================== */}
       <div className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-[#F1F5F9] pb-3">
-          <div>
-            <h3 className="text-[16px] font-bold text-[#191F28] flex items-center gap-2">
-              <BookOpen className="w-5 h-5 text-[#0284C7]" />
-              학술 문헌 RAG & 피어 리뷰 근거 대조 (Integrated Literature Grounding)
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Flame className="w-5 h-5 text-[#F59E0B]" />
+            <h3 className="text-[16px] font-bold text-[#191F28]">
+              추가 물성(Hall 전하수송 · LFA 열수송) Wiedemann–Franz 분리 및 학술 문헌 RAG
             </h3>
-            <p className="text-[12px] text-[#6B7684] mt-0.5">
-              OpenAlex 및 Crossref DOI를 연계하여 재료 조성 및 측정 물성과 일치하는 공인 학술 논문을 실시간 대조합니다.
-            </p>
           </div>
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-bold bg-[#DCFCE7] text-[#15803D]">
-            <ShieldCheck className="w-4 h-4" />
-            Crossref DOI 검증 완료
-          </span>
+          <button
+            type="button"
+            onClick={() => {
+              const next = !showTransportSection;
+              setShowTransportSection(next);
+              if (next && !result) {
+                executeTransportIntegration();
+              }
+            }}
+            className="px-3.5 py-1.5 rounded-[10px] bg-[#F8FAFC] hover:bg-[#EFF6FF] text-[#1D4ED8] border border-[#CBD5E1] text-[12px] font-bold cursor-pointer"
+          >
+            {showTransportSection ? "전하·열수송 패널 접기" : "Hall · LFA 수송 물성 및 문헌 RAG 열기"}
+          </button>
         </div>
 
-        {/* References List */}
-        {litLoading ? (
-          <div className="py-8 flex justify-center items-center gap-2 text-[#64748B] text-[13px]">
-            <Loader2 className="w-4 h-4 animate-spin text-[#0284C7]" />
-            학술 문헌 데이터베이스 검색 및 DOI 검증 중...
-          </div>
-        ) : references.length > 0 ? (
-          <div className="space-y-2.5">
-            {references.map((ref, idx) => (
-              <div
-                key={idx}
-                className="p-3.5 rounded-[12px] bg-[#F8FAFC] border border-[#E2E8F0] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 hover:bg-[#F1F5F9] transition"
-              >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-full bg-[#E0F2FE] text-[#0284C7] text-[11px] font-bold flex items-center justify-center">
-                      {idx + 1}
-                    </span>
-                    <strong className="text-[13px] text-[#0F172A]">{ref.title}</strong>
-                  </div>
-                  <div className="text-[12px] text-[#475569] pl-7">
-                    <span>{ref.journal}</span> ({ref.year}) · 저자: {ref.authors.slice(0, 3).join(", ")}
-                    {ref.authors.length > 3 && " et al."}
-                  </div>
-                  <div className="text-[11px] font-mono text-[#64748B] pl-7">
-                    DOI: {ref.doi}
-                  </div>
+        {showTransportSection && (
+          <div className="space-y-6 pt-3 border-t border-[#E2E8F0]">
+            {result?.wiedemann_franz && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <div className="lg:col-span-5 bg-[#F8FAFC] rounded-[16px] p-4 border border-[#E2E8F0]">
+                  <PlotlyChart
+                    data={pieData}
+                    layout={pieLayout}
+                    config={{ responsive: true }}
+                    style={{ width: "100%", height: "320px" }}
+                  />
                 </div>
-
-                <a
-                  href={`https://doi.org/${ref.doi}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 rounded-[8px] bg-white border border-[#CBD5E1] text-[#0284C7] hover:bg-[#E0F2FE] text-[12px] font-semibold transition flex items-center gap-1 self-end sm:self-auto cursor-pointer"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  원문 링크
-                </a>
+                <div className="lg:col-span-7 bg-[#F8FAFC] rounded-[16px] p-4 border border-[#E2E8F0] space-y-3 text-[12px]">
+                  <h4 className="text-[14px] font-bold text-[#191F28]">
+                    Wiedemann–Franz 전자/격자 열전도 분리 및 문헌 근거
+                  </h4>
+                  <p className="text-[#334155]">
+                    전체 열전도도 {result.wiedemann_franz.total_thermal_conductivity_W_mK} W/m·K 중 격자 포논 기여분(κ_L)은{" "}
+                    <strong>
+                      {result.wiedemann_franz.lattice_thermal_conductivity_W_mK} W/m·K ({result.wiedemann_franz.lattice_fraction_pct}%)
+                    </strong>
+                    , 전자 기여분(κ_e)은{" "}
+                    <strong>
+                      {result.wiedemann_franz.electronic_thermal_conductivity_W_mK} W/m·K ({result.wiedemann_franz.electronic_fraction_pct}%)
+                    </strong>
+                    입니다.
+                  </p>
+                  {litLoading ? (
+                    <div className="text-[#64748B]">문헌 검색 중...</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {references.map((ref, idx) => (
+                        <div key={idx} className="p-2.5 bg-white rounded-[10px] border border-[#E2E8F0] flex justify-between items-center gap-2">
+                          <div>
+                            <strong className="text-[#0F172A] block">{ref.title}</strong>
+                            <span className="text-[11px] text-[#64748B]">
+                              {ref.journal} ({ref.year}) · DOI: {ref.doi}
+                            </span>
+                          </div>
+                          <a
+                            href={`https://doi.org/${ref.doi}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="px-2.5 py-1 rounded bg-[#EFF6FF] text-[#1D4ED8] text-[11px] font-bold shrink-0"
+                          >
+                            DOI 원문
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            ))}
-          </div>
-        ) : (
-          <div className="py-6 text-center text-[#64748B] text-[13px]">
-            해당 조건의 문헌을 검색 중이거나 등록된 논문이 없습니다.
+            )}
           </div>
         )}
       </div>
 
-      {/* Structured 12-Section Vertex AI Scientific Report in Korean */}
-      {aiReport && (
-        <div className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-5">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-[#F1F5F9] pb-3">
-            <div>
-              <h3 className="text-[17px] font-bold text-[#191F28] flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-[#8B5CF6]" />
-                Vertex AI 정밀 과학 리포트 (12-Section Korean Report)
-              </h3>
-              <p className="text-[12px] text-[#6B7684] mt-0.5">
-                국제 재료과학 이론 및 검증된 학술 논문에 근거하여 연구자가 쉽게 이해할 수 있도록 작성된 종합 보고서입니다.
-              </p>
-            </div>
-            <span className="text-[12px] text-[#6B7684] font-medium bg-[#F1F5F9] px-2.5 py-1 rounded-full">
-              {aiReport.ai_engine}
-            </span>
-          </div>
-
-          <div className="space-y-4 text-[13px] text-[#334155] leading-relaxed">
-            {/* 1. 종합 요약 */}
-            <div className="p-4 rounded-[12px] bg-[#ECFDF5] border border-[#A7F3D0] space-y-1">
-              <h4 className="font-bold text-[#065F46] flex items-center gap-1.5 text-[14px]">
-                <CheckCircle2 className="w-4 h-4" />
-                1. 종합 핵심 요약 (Analysis Summary)
-              </h4>
-              <p className="text-[#064E3B]">{aiReport.analysis_summary}</p>
-            </div>
-
-            {/* 2. 실험 조건 & 데이터 품질 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-3.5 rounded-[12px] bg-[#F8FAFC] border border-[#E2E8F0]">
-                <h4 className="font-bold text-[#0F172A] mb-1">2. 실험 조건 요약 (Experimental Conditions)</h4>
-                <p className="text-[#475569]">{aiReport.input_data_summary}</p>
-              </div>
-              <div className="p-3.5 rounded-[12px] bg-[#F8FAFC] border border-[#E2E8F0]">
-                <h4 className="font-bold text-[#0F172A] mb-1">3. 데이터 신뢰도 평가 (Data Quality Assessment)</h4>
-                <p className="text-[#475569]">{aiReport.data_quality_assessment}</p>
-              </div>
-            </div>
-
-            {/* 4. 그래프 해석 & 공정 영향 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-3.5 rounded-[12px] bg-[#F8FAFC] border border-[#E2E8F0]">
-                <h4 className="font-bold text-[#0F172A] mb-1">4. 측정 곡선 및 기울기 물리적 해석 (Graph Interpretation)</h4>
-                <p className="text-[#475569]">{aiReport.graph_interpretation}</p>
-              </div>
-              <div className="p-3.5 rounded-[12px] bg-[#F8FAFC] border border-[#E2E8F0]">
-                <h4 className="font-bold text-[#0F172A] mb-1">5. 조성 및 공정 조건의 영향 (Composition & Processing)</h4>
-                <p className="text-[#475569]">{aiReport.composition_processing_interpretation}</p>
-              </div>
-            </div>
-
-            {/* 6. 문헌 비교 */}
-            <div className="p-3.5 rounded-[12px] bg-[#F5F3FF] border border-[#DDD6FE]">
-              <h4 className="font-bold text-[#5B21B6] mb-1">6. 학술 문헌 벤치마크 비교 (Literature Comparison)</h4>
-              <p className="text-[#4C1D95]">{aiReport.literature_comparison}</p>
-            </div>
-
-            {/* 7. 수송 메커니즘 고찰 */}
-            <div className="p-3.5 rounded-[12px] bg-[#F8FAFC] border border-[#E2E8F0]">
-              <h4 className="font-bold text-[#0F172A] mb-1">7. 주도적 물리 전도/산란 메커니즘 (Mechanism Discussion)</h4>
-              <p className="text-[#475569]">{aiReport.mechanism_discussion}</p>
-            </div>
-
-            {/* 8. 대체 가설 & 한계 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-3.5 rounded-[12px] bg-[#F8FAFC] border border-[#E2E8F0]">
-                <h4 className="font-bold text-[#0F172A] mb-1">8. 대안적 가설 (Alternative Explanations)</h4>
-                <p className="text-[#475569]">{aiReport.alternative_explanations}</p>
-              </div>
-              <div className="p-3.5 rounded-[12px] bg-[#FFFBEB] border border-[#FDE68A]">
-                <h4 className="font-bold text-[#92400E] mb-1">9. 모델 가정 및 측정 불확도 (Limitations & Uncertainty)</h4>
-                <p className="text-[#78350F]">{aiReport.limitations_and_uncertainty}</p>
-              </div>
-            </div>
-
-            {/* 10. 후속 추천 실험 */}
-            <div className="p-3.5 rounded-[12px] bg-[#F8FAFC] border border-[#E2E8F0]">
-              <h4 className="font-bold text-[#0F172A] mb-1.5">10. 제안하는 후속 보완 실험 (Suggested Next Experiments)</h4>
-              <ul className="list-disc pl-5 space-y-1 text-[#475569]">
-                {aiReport.suggested_additional_experiments.map((exp, idx) => (
-                  <li key={idx} className="font-medium">{exp}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Interactive Grounded Research Assistant */}
+      {/* =====================================================================
+          INTERACTIVE GROUNDED RESEARCH ASSISTANT
+         ===================================================================== */}
       <div className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-4">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-[#F1F5F9] pb-3">
           <div>
             <h3 className="text-[16px] font-bold text-[#191F28] flex items-center gap-2">
               <MessageSquare className="w-5 h-5 text-[#3182F6]" />
-              근거 기반 대화형 연구 어시스턴트 (Interactive Research Assistant)
+              근거 기반 대화형 연구 어시스턴트 (Vertex AI / Gemini + Materials Project DB)
             </h3>
             <p className="text-[12px] text-[#6B7684] mt-0.5">
-              측정 데이터 및 피어 리뷰 학술 논문과 연계하여 연구자의 질문에 명확한 물리적 근거와 함께 답변합니다.
+              현재 비교 중인 시편들의 실험 조건, XRD 피크 이동, 이차상 판정 및 SEM 관찰 결과를 바탕으로 질문에 답변합니다.
             </p>
           </div>
-          <span className="text-[12px] font-medium text-[#2563EB] bg-[#EFF6FF] px-2.5 py-1 rounded-full">
-            Grounded Q&A Engine
-          </span>
         </div>
 
-        {/* Quick Suggestion Pills */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[11px] font-bold text-[#64748B]">추천 질문:</span>
-          <button
-            type="button"
-            onClick={() => handleSendQa("Wiedemann-Franz 전자 vs 포논 열전도 분리 원리와 의미를 설명해줘")}
-            className="px-2.5 py-1 rounded-full bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#334155] text-[11px] font-medium transition cursor-pointer"
-          >
-            💡 Wiedemann-Franz 전자 vs 포논 분리
-          </button>
-          <button
-            type="button"
-            onClick={() => handleSendQa("캐리어 농도와 이동도의 산란 메커니즘을 설명해줘")}
-            className="px-2.5 py-1 rounded-full bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#334155] text-[11px] font-medium transition cursor-pointer"
-          >
-            💡 캐리어 농도 및 산란 기전
-          </button>
-          <button
-            type="button"
-            onClick={() => handleSendQa("XRD Scherrer 결정자 크기와 SEM 입경 차이가 왜 발생하는지 설명해줘")}
-            className="px-2.5 py-1 rounded-full bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#334155] text-[11px] font-medium transition cursor-pointer"
-          >
-            💡 XRD 결정자 vs SEM 입경 차이
-          </button>
-          <button
-            type="button"
-            onClick={() => handleSendQa("시편 두께 측정 오차가 Hall 및 LFA 계산에 미치는 영향은?")}
-            className="px-2.5 py-1 rounded-full bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#334155] text-[11px] font-medium transition cursor-pointer"
-          >
-            💡 시편 두께 오차 영향
-          </button>
-        </div>
-
-        {/* Chat History Box */}
-        <div className="h-[360px] overflow-y-auto space-y-3 p-4 rounded-[14px] bg-[#F8FAFC] border border-[#E2E8F0]">
-          {qaHistory.map((item, idx) => (
-            <div
-              key={idx}
-              className={`flex flex-col ${item.sender === "user" ? "items-end" : "items-start"}`}
-            >
+        <div className="bg-[#F8FAFC] rounded-[16px] p-4 border border-[#E2E8F0] max-h-[280px] overflow-y-auto space-y-3">
+          {qaHistory.map((msg, i) => (
+            <div key={i} className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
               <div
-                className={`max-w-[85%] rounded-[14px] p-3.5 text-[13px] leading-relaxed shadow-sm ${
-                  item.sender === "user"
-                    ? "bg-[#3182F6] text-white"
-                    : "bg-white text-[#1E293B] border border-[#E2E8F0]"
+                className={`max-w-[85%] rounded-[14px] p-3.5 text-[13px] leading-relaxed ${
+                  msg.sender === "user"
+                    ? "bg-[#3182F6] text-white font-medium"
+                    : "bg-white border border-[#E2E8F0] text-[#1E293B] shadow-sm"
                 }`}
               >
-                {item.category && (
-                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-[#2563EB] mb-1">
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>[{item.category}]</span>
+                {msg.sender === "ai" && (
+                  <div className="flex items-center justify-between gap-2 mb-1 pb-1 border-b border-[#F1F5F9] text-[11px]">
+                    <span className="font-bold text-[#2563EB]">{msg.category}</span>
+                    {msg.engine && <span className="text-[#64748B]">{msg.engine}</span>}
                   </div>
                 )}
-                <div className="whitespace-pre-wrap">{item.text}</div>
-                {item.engine && (
-                  <div className="text-[10px] text-[#94A3B8] mt-1 pt-1 border-t border-[#F1F5F9]">
-                    엔진: {item.engine}
-                  </div>
-                )}
+                <div className="whitespace-pre-line">{msg.text}</div>
               </div>
             </div>
           ))}
-
-          {qaLoading && (
-            <div className="flex items-center gap-2 text-[#64748B] text-[12px] bg-white p-3 rounded-[12px] border border-[#E2E8F0] w-fit">
-              <Loader2 className="w-4 h-4 animate-spin text-[#3182F6]" />
-              물리 법칙 및 학술 문헌 근거 대조 중...
-            </div>
-          )}
         </div>
 
-        {/* Chat Input */}
-        <div className="flex gap-2">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSendQa();
+          }}
+          className="flex gap-2"
+        >
           <input
             type="text"
             value={qaInput}
             onChange={(e) => setQaInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSendQa();
-              }
-            }}
-            placeholder="시료 물성, 전하/열수송 메커니즘, 학술 논문 근거 등에 대해 자유롭게 질문하세요..."
-            className="flex-1 px-4 py-2.5 rounded-[12px] border border-[#CBD5E1] text-[13px] focus:outline-none focus:border-[#3182F6] bg-white"
+            placeholder="시편 간 XRD 피크 이동 원인, 이차상 판정 기준, SEM 관찰 한계 등에 대해 질문해 보세요..."
+            className="flex-1 px-4 py-2.5 rounded-[12px] border border-[#CBD5E1] text-[13px]"
           />
           <button
-            type="button"
+            type="submit"
             disabled={qaLoading || !qaInput.trim()}
-            onClick={() => handleSendQa()}
-            className="px-4 py-2.5 rounded-[12px] bg-[#3182F6] hover:bg-[#2563EB] text-white font-bold text-[13px] transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            className="px-5 py-2.5 rounded-[12px] bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-[13px] font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
           >
-            <Send className="w-4 h-4" />
-            전송
+            {qaLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            질문 전송
           </button>
-        </div>
+        </form>
       </div>
     </div>
   );

@@ -108,6 +108,7 @@ export interface ProjectDetail {
   expected_formula: string;
   is_same_sample: boolean;
   is_sample_demo: boolean;
+  experiment_meta?: ExperimentMeta;
   current_conditions: {
     xrd_params?: Partial<XRDParams>;
     sem_params?: Partial<SEMParams>;
@@ -129,6 +130,7 @@ export interface ProjectListItem {
   expected_elements: string[];
   is_same_sample: boolean;
   is_sample_demo: boolean;
+  experiment_meta?: ExperimentMeta;
   file_roles: string[];
   run_count: number;
   updated_at: string;
@@ -419,3 +421,22 @@ export interface IntegratedAnalysisResult {
   warnings: string[];
   notes: string[];
 }
+
+export type ComparisonQuestionType = "process_variation" | "dopant_type" | "dopant_amount";
+
+export interface ExperimentMeta {
+  base_matrix: string;
+  nominal_composition: string;
+  dopant_element: string;
+  dopant_amount: number | null;
+  dopant_unit: string;
+  process_temp_c: number | null;
+  process_time_h: number | null;
+  atmosphere: string;
+  process_method: string;
+  replicate_id: string;
+  is_synthetic_demo?: boolean;
+  explicitly_saved?: boolean;
+  missing_fields?: string[];
+}
+
