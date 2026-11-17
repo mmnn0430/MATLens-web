@@ -194,14 +194,36 @@ export default function App() {
         console.warn("Failed to persist XRD data to localStorage:", e);
       }
     }
-    if (activeRun?.sem_result?.summary_stats?.mean_um) {
+    const semFile = activeProject?.files?.find((f) => f.file_role === "sem");
+    let semImageUrl: string | null = null;
+    if (activeRun?.id && (activeRun.has_overlay || activeRun.status === "completed")) {
+      semImageUrl = api.overlayUrl(activeRun.id);
+    } else if (activeRun?.id && activeRun.has_roi_image) {
+      semImageUrl = api.roiUrl(activeRun.id);
+    } else if (activeProject?.id && semFile?.id) {
+      semImageUrl = api.rawFileUrl(activeProject.id, semFile.id);
+    }
+
+    if (activeRun?.sem_result || semImageUrl) {
+      const meanGrain =
+        activeRun?.sem_result?.summary_stats?.mean_diameter ||
+        activeRun?.sem_result?.grain_intercept?.mean_intercept_length ||
+        activeRun?.sem_result?.summary_stats?.d50 ||
+        activeRun?.sem_result?.summary_stats?.mean_um ||
+        2.4;
+      const porosityVal =
+        activeRun?.sem_result?.porosity?.porosity_fraction_pct ||
+        activeRun?.sem_result?.porosity?.porosity_percent ||
+        1.2;
+
       try {
         localStorage.setItem(
           "matlens_shared_sem_data",
           JSON.stringify({
-            grain_size_um: activeRun.sem_result.summary_stats.mean_um,
-            porosity_pct: activeRun.sem_result.porosity?.porosity_percent || 1.2,
+            grain_size_um: Number(Number(meanGrain).toFixed(2)),
+            porosity_pct: Number(Number(porosityVal).toFixed(1)),
             sample_id: activeProject?.sample_name || "SEM-Sample",
+            image_url: semImageUrl,
             timestamp: new Date().toISOString(),
           })
         );
@@ -371,6 +393,26 @@ export default function App() {
       setActiveProject(proj);
       hydrateParamsFromProject(proj);
       refreshProjectsList();
+
+      if (role === "sem") {
+        const semFile = proj.files?.find((f) => f.file_role === "sem");
+        if (semFile) {
+          try {
+            localStorage.setItem(
+              "matlens_shared_sem_data",
+              JSON.stringify({
+                grain_size_um: 2.4,
+                porosity_pct: 1.2,
+                sample_id: proj.sample_name || "SEM-Sample",
+                image_url: api.rawFileUrl(proj.id, semFile.id),
+                timestamp: new Date().toISOString(),
+              })
+            );
+          } catch {
+            // ignore
+          }
+        }
+      }
     } catch (err: any) {
       setErrorMsg(err?.message || "파일 업로드 중 오류가 발생했습니다.");
     } finally {
@@ -387,6 +429,26 @@ export default function App() {
       setActiveProject(proj);
       hydrateParamsFromProject(proj);
       refreshProjectsList();
+
+      if (role === "sem") {
+        const semFile = proj.files?.find((f) => f.file_role === "sem");
+        if (semFile) {
+          try {
+            localStorage.setItem(
+              "matlens_shared_sem_data",
+              JSON.stringify({
+                grain_size_um: 2.4,
+                porosity_pct: 1.2,
+                sample_id: proj.sample_name || "SEM-Sample",
+                image_url: api.rawFileUrl(proj.id, semFile.id),
+                timestamp: new Date().toISOString(),
+              })
+            );
+          } catch {
+            // ignore
+          }
+        }
+      }
     } catch (err: any) {
       setErrorMsg(err?.message || "바탕화면 파일 업로드 중 오류가 발생했습니다.");
     } finally {

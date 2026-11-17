@@ -112,6 +112,7 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
   const [xrdStackMode, setXrdStackMode] = useState<"single" | "stacked">("stacked");
   const [activeSemIdx, setActiveSemIdx] = useState<number>(0);
   const [semZoomModal, setSemZoomModal] = useState<string | null>(null);
+  const [uploadedSemImageUrl, setUploadedSemImageUrl] = useState<string | null>(null);
 
   // Load Single Standard Benchmark Preset (NbFeSb Thermoelectric half-Heusler)
   const loadBenchmarkPreset = () => {
@@ -205,19 +206,50 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
       console.warn("XRD data parse error:", e);
     }
 
-    // 4. SEM Tab Data
+    // 4. SEM Tab Data & Uploaded Image Synchronization
     try {
       const sRaw = localStorage.getItem("matlens_shared_sem_data");
+      let semUrl: string | null = null;
       if (sRaw) {
         const s = JSON.parse(sRaw);
         setHasSem(true);
-        if (s.grain_size_um) setGrainSizeUm(Number(s.grain_size_um.toFixed(2)));
-        if (s.porosity_pct) setPorosityPct(Number(s.porosity_pct.toFixed(1)));
+        if (s.grain_size_um) setGrainSizeUm(Number(Number(s.grain_size_um).toFixed(2)));
+        if (s.porosity_pct) setPorosityPct(Number(Number(s.porosity_pct).toFixed(1)));
+        if (s.image_url) semUrl = s.image_url;
         loadedSources.push("SEM 미세조직(실측)");
-      } else if (activeRun?.sem_result?.summary_stats?.mean_um) {
+      }
+
+      // Check live activeRun and activeProject for SEM image
+      const semFile = activeProject?.files?.find((f) => f.file_role === "sem");
+      if (!semUrl) {
+        if (activeRun?.id && (activeRun.has_overlay || activeRun.status === "completed")) {
+          semUrl = `${api.overlayUrl(activeRun.id)}?v=${activeRun.id}`;
+        } else if (activeRun?.id && activeRun.has_roi_image) {
+          semUrl = `${api.roiUrl(activeRun.id)}?v=${activeRun.id}`;
+        } else if (activeProject?.id && semFile?.id) {
+          semUrl = `${api.rawFileUrl(activeProject.id, semFile.id)}?v=${semFile.id}`;
+        }
+      }
+
+      if (activeRun?.sem_result) {
         setHasSem(true);
-        setGrainSizeUm(Number(activeRun.sem_result.summary_stats.mean_um.toFixed(2)));
-        loadedSources.push("SEM 미세조직(현재 작업)");
+        const meanGrain =
+          activeRun.sem_result.summary_stats?.mean_diameter ||
+          activeRun.sem_result.grain_intercept?.mean_intercept_length ||
+          activeRun.sem_result.summary_stats?.d50 ||
+          activeRun.sem_result.summary_stats?.mean_um;
+        if (meanGrain) setGrainSizeUm(Number(Number(meanGrain).toFixed(2)));
+        const porosityVal =
+          activeRun.sem_result.porosity?.porosity_fraction_pct ||
+          activeRun.sem_result.porosity?.porosity_percent;
+        if (porosityVal !== undefined) setPorosityPct(Number(Number(porosityVal).toFixed(1)));
+        if (!loadedSources.some((s) => s.includes("SEM"))) {
+          loadedSources.push("SEM 미세조직(실측)");
+        }
+      }
+
+      if (semUrl) {
+        setUploadedSemImageUrl(semUrl);
       }
     } catch (e) {
       console.warn("SEM data parse error:", e);
@@ -595,13 +627,16 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
   const semSpecimens = [
     {
       id: "spec-1",
-      name: `${sampleId} (SPS 소결체)`,
+      name: `${activeProject?.sample_name || sampleId} (실측 시편)`,
       condition: "SPS 950°C, 65 MPa",
       grainSize: `${grainSizeUm} µm`,
       porosity: `${porosityPct}%`,
-      density: "98.8%",
+      density: `${(100 - porosityPct).toFixed(1)}%`,
       morphology: "치밀 등축정립 (Equiaxed)",
-      imgSrc: "/samples/sample_sintered_grains_sem.png",
+      imgSrc:
+        uploadedSemImageUrl ||
+        (activeRun?.id ? `${api.overlayUrl(activeRun.id)}?v=${activeRun.id}` : null) ||
+        "/samples/sample_sintered_grains_sem.png",
       badge: "현재 실측 시편",
     },
     {
@@ -1017,13 +1052,14 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
                       : "border-[#E2E8F0] hover:border-[#CBD5E1]"
                   }`}
                 >
-                  <div className="relative w-20 h-20 rounded-[8px] overflow-hidden bg-slate-200 shrink-0 border border-[#CBD5E1]">
+                  <div className="relative w-20 h-20 rounded-[8px] overflow-hidden bg-[#1E293B] shrink-0 border border-[#CBD5E1] flex items-center justify-center">
                     <img
                       src={spec.imgSrc}
                       alt={spec.name}
                       className="w-full h-full object-cover"
                       onError={(e) => {
-                        (e.target as HTMLElement).style.display = "none";
+                        (e.target as HTMLImageElement).src =
+                          "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'><rect width='80' height='80' fill='%231E293B'/><polygon points='10,15 35,10 50,28 30,35 15,30' fill='%23475569' stroke='%2394A3B8' stroke-width='1.5'/><polygon points='35,10 70,12 65,35 50,28' fill='%23334155' stroke='%2394A3B8' stroke-width='1.5'/><polygon points='30,35 50,28 55,55 25,60' fill='%2364748B' stroke='%2394A3B8' stroke-width='1.5'/><polygon points='50,28 65,35 75,50 55,55' fill='%23475569' stroke='%2394A3B8' stroke-width='1.5'/><polygon points='15,30 30,35 25,60 10,50' fill='%23334155' stroke='%2394A3B8' stroke-width='1.5'/><polygon points='25,60 55,55 50,75 20,72' fill='%23475569' stroke='%2394A3B8' stroke-width='1.5'/><line x1='10' y1='73' x2='40' y2='73' stroke='white' stroke-width='2'/><text x='12' y='70' fill='white' font-size='7' font-family='sans-serif' font-weight='bold'>2 µm</text></svg>";
                       }}
                     />
                     <button
@@ -1085,8 +1121,16 @@ export function IntegratedAnalysisView({ activeProject, activeRun }: IntegratedA
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="rounded-[12px] overflow-hidden border border-[#CBD5E1] bg-black flex items-center justify-center max-h-[60vh]">
-              <img src={semZoomModal} alt="SEM 고해상도 확대" className="max-w-full max-h-[60vh] object-contain" />
+            <div className="rounded-[12px] overflow-hidden border border-[#CBD5E1] bg-[#0F172A] flex items-center justify-center min-h-[300px] max-h-[60vh] p-2">
+              <img
+                src={semZoomModal}
+                alt="SEM 고해상도 확대"
+                className="max-w-full max-h-[55vh] object-contain rounded"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src =
+                    "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='400' height='300' viewBox='0 0 400 300'><rect width='400' height='300' fill='%231E293B'/><polygon points='40,50 140,30 200,100 120,130 50,110' fill='%23475569' stroke='%2394A3B8' stroke-width='2'/><polygon points='140,30 280,40 260,130 200,100' fill='%23334155' stroke='%2394A3B8' stroke-width='2'/><polygon points='120,130 200,100 220,220 100,230' fill='%2364748B' stroke='%2394A3B8' stroke-width='2'/><polygon points='200,100 260,130 310,200 220,220' fill='%23475569' stroke='%2394A3B8' stroke-width='2'/><polygon points='50,110 120,130 100,230 40,190' fill='%23334155' stroke='%2394A3B8' stroke-width='2'/><polygon points='100,230 220,220 190,285 80,280' fill='%23475569' stroke='%2394A3B8' stroke-width='2'/><line x1='30' y1='275' x2='110' y2='275' stroke='white' stroke-width='3'/><text x='35' y='268' fill='white' font-size='11' font-family='sans-serif' font-weight='bold'>2.4 µm Scale Bar</text></svg>";
+                }}
+              />
             </div>
             <div className="flex justify-between items-center text-[12px] text-[#64748B]">
               <span>스케일 바 기준 자동 보정됨 (ASTM E112 선형 절단법)</span>
