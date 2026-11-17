@@ -9,6 +9,7 @@ import {
   Microscope,
   Activity,
   KeyRound,
+  Sparkles,
 } from "lucide-react";
 import { api, DEFAULT_SEM_PARAMS, DEFAULT_XRD_PARAMS } from "./api";
 import type {
@@ -24,12 +25,13 @@ import { XrdView } from "./components/XrdView";
 import { SemView } from "./components/SemView";
 import { IntegratedReportView } from "./components/IntegratedReportView";
 import { UtmView } from "./components/UtmView";
+import { UniversalBatchPlatformView } from "./components/batch/UniversalBatchPlatformView";
 import { Button, SourceTag } from "./components/ui/primitives";
 
 function readUrlState() {
   const sp = new URLSearchParams(window.location.search);
   return {
-    mode: (sp.get("mode") as "matlens" | "utm") || "matlens",
+    mode: (sp.get("mode") as "matlens" | "utm" | "batch") || "matlens",
     projectId: sp.get("project"),
     runId: sp.get("run"),
     view: (sp.get("view") as "setup" | "results") || null,
@@ -38,7 +40,7 @@ function readUrlState() {
 }
 
 function writeUrlState(next: {
-  mode?: "matlens" | "utm";
+  mode?: "matlens" | "utm" | "batch";
   projectId?: string | null;
   runId?: string | null;
   view?: "setup" | "results";
@@ -55,7 +57,7 @@ function writeUrlState(next: {
 }
 
 export default function App() {
-  const [serviceMode, setServiceMode] = useState<"matlens" | "utm">("matlens");
+  const [serviceMode, setServiceMode] = useState<"matlens" | "utm" | "batch">("matlens");
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null);
@@ -169,7 +171,9 @@ export default function App() {
       .catch(() => {});
     refreshProjectsList();
 
-    if (urlState.mode === "utm") {
+    if (urlState.mode === "batch") {
+      setServiceMode("batch");
+    } else if (urlState.mode === "utm") {
       setServiceMode("utm");
     } else if (urlState.projectId) {
       if (urlState.tab) setActiveTab(urlState.tab);
@@ -534,8 +538,23 @@ export default function App() {
                     : "text-[#6B7684] hover:text-[#191F28]"
                 }`}
               >
-                <span>UTM 데이터 분석</span>
-                <span className="w-1.5 h-1.5 rounded-full bg-[#3182F6]" />
+                <span>UTM 인장시험</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setServiceMode("batch");
+                  writeUrlState({ mode: "batch" });
+                }}
+                className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-[8px] text-[12px] sm:text-[13px] font-semibold transition-all flex items-center gap-1.5 ${
+                  serviceMode === "batch"
+                    ? "bg-white text-[#2563EB] shadow-sm font-bold"
+                    : "text-[#4E5968] hover:text-[#191F28]"
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-[#2563EB]" />
+                <span>복수 데이터 일괄 비교 (Universal Batch)</span>
+                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-[#3182F6] text-white">NEW</span>
               </button>
             </div>
 
@@ -736,7 +755,9 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-8 py-6 sm:py-8">
-        {serviceMode === "utm" ? (
+        {serviceMode === "batch" ? (
+          <UniversalBatchPlatformView />
+        ) : serviceMode === "utm" ? (
           <UtmView />
         ) : viewMode === "setup" || !activeProject ? (
           <LandingSetup
