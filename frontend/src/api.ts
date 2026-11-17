@@ -265,4 +265,98 @@ export const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   }),
+
+  // Multi-Dataset Scientific Plotting Endpoints
+  uploadPlotDatasets: async (
+    files: File[],
+    meta?: { sample_id?: string; sample_name?: string; measurement_type?: string }
+  ) => {
+    const fd = new FormData();
+    files.forEach((f) => fd.append("files", f));
+    if (meta?.sample_id) fd.append("sample_id", meta.sample_id);
+    if (meta?.sample_name) fd.append("sample_name", meta.sample_name);
+    if (meta?.measurement_type) fd.append("measurement_type", meta.measurement_type);
+    const r = await fetch("/api/v1/plots/datasets", { method: "POST", body: fd });
+    return handleJson<{ status: string; count: number; datasets: any[] }>(r);
+  },
+
+  registerPlotDatasetJson: async (payload: any) => {
+    const r = await fetch("/api/v1/plots/datasets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<{ status: string; datasets: any[] }>(r);
+  },
+
+  digitizeXrdImage: async (file: File, bounds?: { two_theta_min?: number; two_theta_max?: number; intensity_min?: number; intensity_max?: number }) => {
+    const fd = new FormData();
+    fd.append("image", file);
+    if (bounds?.two_theta_min !== undefined) fd.append("two_theta_min", String(bounds.two_theta_min));
+    if (bounds?.two_theta_max !== undefined) fd.append("two_theta_max", String(bounds.two_theta_max));
+    if (bounds?.intensity_min !== undefined) fd.append("intensity_min", String(bounds.intensity_min));
+    if (bounds?.intensity_max !== undefined) fd.append("intensity_max", String(bounds.intensity_max));
+    const r = await fetch("/api/v1/plots/digitize-image", { method: "POST", body: fd });
+    return handleJson<{ status: string; dataset: any }>(r);
+  },
+
+  createPlot: async (payload: any) => {
+    const r = await fetch("/api/v1/plots/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  updatePlot: async (plotId: string, patch: any) => {
+    const r = await fetch(`/api/v1/plots/${plotId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    return handleJson<any>(r);
+  },
+
+  getPlot: async (plotId: string) => {
+    const r = await fetch(`/api/v1/plots/${plotId}`);
+    return handleJson<any>(r);
+  },
+
+  comparePlotDatasets: async (payload: any) => {
+    const r = await fetch("/api/v1/plots/compare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  comparePeaks: async (payload: any) => {
+    const r = await fetch("/api/v1/plots/peak-comparison", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  getPlotPresets: async () => {
+    const r = await fetch("/api/v1/plots/presets");
+    return handleJson<{ presets: any[] }>(r);
+  },
+
+  getSampleSemLink: async (sampleId: string) => {
+    const r = await fetch(`/api/v1/plots/samples/${encodeURIComponent(sampleId)}/sem-link`);
+    return handleJson<any>(r);
+  },
+
+  exportPlot: (payload: any, filename = "matlens_scientific_plot") => {
+    const ext = payload.format || "png";
+    return downloadFile("/api/v1/plots/export", `${filename}.${ext}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
 };

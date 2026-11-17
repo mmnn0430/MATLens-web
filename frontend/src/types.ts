@@ -287,3 +287,107 @@ export interface UTMAnalysisResult {
   curves: UTMCurves;
 }
 
+// ---------------- Multi-Dataset Plotting Types ----------------
+
+export interface PlotDataset {
+  id: string;
+  dataset_id?: string;
+  sample_id: string;
+  sample_name: string;
+  measurement_type: "XRD" | "SEM" | "UTM" | "LFA" | "Hall" | string;
+  x_unit: string;
+  y_unit: string;
+  source_type: "raw_file" | "image_digitization" | "analysis_run";
+  source_filename?: string;
+  color: string;
+  offset: number;
+  visible: boolean;
+  line_width: number;
+  line_style: "solid" | "dash" | "dot";
+  x: number[];
+  y: number[];
+  y_raw?: number[];
+  y_normalized?: number[];
+  y_display?: number[];
+  panel_index?: number;
+  peaks?: Array<{
+    peak_id: string;
+    two_theta: number;
+    d_spacing: number;
+    height: number;
+    fwhm: number;
+    rel_intensity: number;
+  }>;
+  data_quality?: {
+    num_points: number;
+    confidence?: string;
+    estimated_error_deg?: number;
+    snr_estimate?: number;
+    is_uniform_step?: boolean;
+    step?: number;
+    x_min?: number;
+    x_max?: number;
+    caution_note?: string;
+  };
+  measurement_conditions?: Record<string, any>;
+  processing_history?: Array<{ step: string; timestamp?: string; [k: string]: any }>;
+}
+
+export interface PlotAnnotation {
+  id: string;
+  type: "peak_label" | "miller_index" | "phase_marker" | "shift_arrow" | "text";
+  x: number;
+  y: number;
+  to_x?: number;
+  text: string;
+  hkl?: string;
+  phase?: string;
+  delta_str?: string;
+  verification_status?: "Verified (COD)" | "Candidate (89% Match)" | "User Added" | string;
+}
+
+export interface PeakDifferenceRow {
+  peak_index: number;
+  sample_id: string;
+  sample_name: string;
+  ref_two_theta: number;
+  sample_two_theta: number | null;
+  delta_two_theta: number | null;
+  ref_d_spacing: number;
+  sample_d_spacing: number | null;
+  delta_d_spacing: number | null;
+  ref_fwhm: number;
+  sample_fwhm: number | null;
+  fwhm_ratio: number | null;
+  intensity_ratio: number;
+  status: string;
+}
+
+export interface XrdSemLinkedResult {
+  sample_id: string;
+  has_linked_sem: boolean;
+  sem_source_file?: string;
+  process_temperature?: string;
+  grain_size_analysis?: {
+    mean_diameter_um: number;
+    d50_um: number;
+    d90_um: number;
+    total_grains_counted: number;
+    porosity_pct: number;
+    histogram: {
+      bins: number[];
+      counts: number[];
+    };
+  };
+  xrd_phase_info?: {
+    dominant_phase: string;
+    secondary_phase?: string;
+    crystallite_size_nm?: number;
+    phase_fraction_wt_pct?: Record<string, number>;
+    candidate_phases?: string[];
+  };
+  integrated_interpretation: string;
+  scientific_disclaimer: string;
+}
+
+

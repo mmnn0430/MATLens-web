@@ -24,12 +24,13 @@ import { XrdView } from "./components/XrdView";
 import { SemView } from "./components/SemView";
 import { IntegratedReportView } from "./components/IntegratedReportView";
 import { UtmView } from "./components/UtmView";
+import { MultiDatasetPlotView } from "./components/MultiDatasetPlotView";
 import { Button, SourceTag } from "./components/ui/primitives";
 
 function readUrlState() {
   const sp = new URLSearchParams(window.location.search);
   return {
-    mode: (sp.get("mode") as "matlens" | "utm") || "matlens",
+    mode: (sp.get("mode") as "matlens" | "compare" | "utm") || "matlens",
     projectId: sp.get("project"),
     runId: sp.get("run"),
     view: (sp.get("view") as "setup" | "results") || null,
@@ -38,7 +39,7 @@ function readUrlState() {
 }
 
 function writeUrlState(next: {
-  mode?: "matlens" | "utm";
+  mode?: "matlens" | "compare" | "utm";
   projectId?: string | null;
   runId?: string | null;
   view?: "setup" | "results";
@@ -55,7 +56,7 @@ function writeUrlState(next: {
 }
 
 export default function App() {
-  const [serviceMode, setServiceMode] = useState<"matlens" | "utm">("matlens");
+  const [serviceMode, setServiceMode] = useState<"matlens" | "compare" | "utm">("matlens");
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null);
@@ -171,6 +172,8 @@ export default function App() {
 
     if (urlState.mode === "utm") {
       setServiceMode("utm");
+    } else if (urlState.mode === "compare") {
+      setServiceMode("compare");
     } else if (urlState.projectId) {
       if (urlState.tab) setActiveTab(urlState.tab);
       openProject(urlState.projectId, urlState.runId, urlState.view || undefined, true);
@@ -243,6 +246,24 @@ export default function App() {
       setIsBusy(false);
     }
   };
+
+  const handleImportCurrentRunToCompare = useCallback(async () => {
+    if (!activeRun) return;
+    try {
+      setIsBusy(true);
+      await api.registerPlotDatasetJson({
+        run_id: activeRun.id,
+        sample_name: `${activeProject?.sample_name || "시료"} (Run #${activeRun.run_number})`,
+        sample_id: activeProject?.sample_name || "Sample",
+      });
+      setServiceMode("compare");
+      writeUrlState({ mode: "compare" });
+    } catch (err: any) {
+      setErrorMsg(err?.message || "현재 분석 결과를 플롯에 등록하지 못했습니다.");
+    } finally {
+      setIsBusy(false);
+    }
+  }, [activeRun, activeProject]);
 
   const handleQuickImportFiles = async (files: FileList) => {
     if (!files || files.length === 0) return;
@@ -525,6 +546,22 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => {
+                  setServiceMode("compare");
+                  writeUrlState({ mode: "compare" });
+                }}
+                className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-[8px] text-[12px] sm:text-[13px] font-semibold transition-all flex items-center gap-1.5 ${
+                  serviceMode === "compare"
+                    ? "bg-white text-[#3182F6] shadow-sm font-bold"
+                    : "text-[#6B7684] hover:text-[#191F28]"
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>다중 데이터 플롯</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-[#3182F6]" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
                   setServiceMode("utm");
                   writeUrlState({ mode: "utm" });
                 }}
@@ -535,7 +572,6 @@ export default function App() {
                 }`}
               >
                 <span>UTM 데이터 분석</span>
-                <span className="w-1.5 h-1.5 rounded-full bg-[#3182F6]" />
               </button>
             </div>
 
@@ -736,7 +772,12 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-8 py-6 sm:py-8">
-        {serviceMode === "utm" ? (
+        {serviceMode === "compare" ? (
+          <MultiDatasetPlotView
+            onImportCurrentRun={handleImportCurrentRunToCompare}
+            hasActiveRun={!!activeRun && !!activeRun.xrd_result}
+          />
+        ) : serviceMode === "utm" ? (
           <UtmView />
         ) : viewMode === "setup" || !activeProject ? (
           <LandingSetup
@@ -764,6 +805,10 @@ export default function App() {
             onNavigateToUtm={() => {
               setServiceMode("utm");
               writeUrlState({ mode: "utm" });
+            }}
+            onNavigateToCompare={() => {
+              setServiceMode("compare");
+              writeUrlState({ mode: "compare" });
             }}
           />
         ) : (
@@ -839,9 +884,20 @@ export default function App() {
                     </Tabs.Trigger>
                   </Tabs.List>
 
-                  <div className="text-[13px] text-[#6B7684] font-medium">
-                    실행 버전: <strong className="text-[#191F28]">Run #{activeRun.run_number}</strong> ·{" "}
-                    {new Date(activeRun.created_at).toLocaleString("ko-KR")}
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleImportCurrentRunToCompare}
+                      className="px-3 py-1.5 rounded-[10px] bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#2563EB] text-[13px] font-semibold flex items-center gap-1.5 transition-colors"
+                      title="현재 측정 데이터를 다중 플롯 시스템에 등록하고 Stacked XRD 비교를 진행합니다."
+                    >
+                      <Layers className="w-4 h-4" />
+                      <span>다중 플롯에서 비교하기</span>
+                    </button>
+                    <div className="text-[13px] text-[#6B7684] font-medium">
+                      실행 버전: <strong className="text-[#191F28]">Run #{activeRun.run_number}</strong> ·{" "}
+                      {new Date(activeRun.created_at).toLocaleString("ko-KR")}
+                    </div>
                   </div>
                 </div>
 

@@ -92,6 +92,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from .api_plots import router as plots_router
+app.include_router(plots_router, prefix="/api/v1/plots")
+app.include_router(plots_router, prefix="/api/plots")
+
 
 # ---------------- Helper Serializers ---------------- #
 def _serialize_project(project_id: str) -> dict[str, Any]:

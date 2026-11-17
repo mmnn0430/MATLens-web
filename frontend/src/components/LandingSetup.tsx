@@ -61,6 +61,7 @@ interface LandingSetupProps {
   onChangeRunAi: (val: boolean) => void;
   onStartRun: () => void;
   onNavigateToUtm?: () => void;
+  onNavigateToCompare?: () => void;
 }
 
 export function LandingSetup({
@@ -86,6 +87,7 @@ export function LandingSetup({
   onChangeRunAi,
   onStartRun,
   onNavigateToUtm,
+  onNavigateToCompare,
 }: LandingSetupProps) {
   const [sampleName, setSampleName] = useState("");
   const [description, setDescription] = useState("");
@@ -215,6 +217,18 @@ export function LandingSetup({
                 >
                   소결 결정립 샘플
                 </Button>
+                {onNavigateToCompare && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={isBusy}
+                    onClick={onNavigateToCompare}
+                    className="border-[#2563EB] text-[#2563EB] hover:bg-[#EFF6FF] font-semibold"
+                  >
+                    <Layers className="w-4 h-4" />
+                    다중 데이터 비교 (Stacked XRD)
+                  </Button>
+                )}
                 {onNavigateToUtm && (
                   <Button
                     type="button"
