@@ -5,7 +5,6 @@ import {
   SlidersHorizontal,
   ArrowLeft,
   Loader2,
-  FileBarChart2,
   Microscope,
   Activity,
   KeyRound,
@@ -40,7 +39,7 @@ function readUrlState() {
     projectId: sp.get("project"),
     runId: sp.get("run"),
     view: (sp.get("view") as "setup" | "results") || null,
-    tab: (sp.get("tab") as "xrd" | "sem" | "report") || "report",
+    tab: (sp.get("tab") as "xrd" | "sem") || "xrd",
   };
 }
 
@@ -49,7 +48,7 @@ function writeUrlState(next: {
   projectId?: string | null;
   runId?: string | null;
   view?: "setup" | "results";
-  tab?: "xrd" | "sem" | "report";
+  tab?: "xrd" | "sem";
 }) {
   const sp = new URLSearchParams();
   if (next.mode && next.mode !== "matlens") sp.set("mode", next.mode);
@@ -73,7 +72,7 @@ export default function App() {
   const [runAi, setRunAi] = useState<boolean>(true);
 
   const [viewMode, setViewMode] = useState<"setup" | "results">("setup");
-  const [activeTab, setActiveTab] = useState<"xrd" | "sem" | "report">("report");
+  const [activeTab, setActiveTab] = useState<"xrd" | "sem">("xrd");
   const [isBusy, setIsBusy] = useState<boolean>(false);
   const [, setIsRetryingAi] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -128,14 +127,7 @@ export default function App() {
           setActiveRun(r);
           const nextView = preferredView || (r.status === "completed" || r.status === "running" ? "results" : "setup");
           setViewMode(nextView);
-          const defaultTab =
-            r.xrd_result && r.sem_result
-              ? "report"
-              : r.xrd_result
-              ? "xrd"
-              : r.sem_result
-              ? "sem"
-              : "report";
+          const defaultTab = r.xrd_result ? "xrd" : "sem";
           setActiveTab(defaultTab);
           writeUrlState({ projectId: proj.id, runId: r.id, view: nextView, tab: defaultTab });
         } else {
@@ -238,12 +230,7 @@ export default function App() {
           }
           if (updated.status === "completed") {
             setViewMode("results");
-            const nextTab =
-              updated.xrd_result && updated.sem_result
-                ? "report"
-                : updated.xrd_result
-                ? "xrd"
-                : "sem";
+            const nextTab = updated.xrd_result ? "xrd" : "sem";
             setActiveTab((prev) => prev || nextTab);
             writeUrlState({
               projectId: updated.project_id,
@@ -368,7 +355,7 @@ export default function App() {
       const r = await api.getRun(started.run_id);
       setActiveRun(r);
       setViewMode("results");
-      writeUrlState({ projectId: proj.id, runId: r.id, view: "results", tab: "report" });
+      writeUrlState({ projectId: proj.id, runId: r.id, view: "results", tab: "xrd" });
     } catch (err: any) {
       setErrorMsg(err?.message || "샘플 프로젝트 생성에 실패했습니다.");
       setIsBusy(false);
@@ -902,12 +889,12 @@ export default function App() {
               </div>
             )}
 
-            {/* Completed Results Tabs: [XRD] [SEM] [통합 리포트] */}
+            {/* Completed Results Tabs: [XRD] [SEM] */}
             {activeRun && activeRun.status === "completed" && (
               <Tabs.Root
                 value={activeTab}
                 onValueChange={(val) => {
-                  const t = val as "xrd" | "sem" | "report";
+                  const t = val as "xrd" | "sem";
                   setActiveTab(t);
                   writeUrlState({
                     projectId: activeProject.id,
@@ -919,7 +906,7 @@ export default function App() {
                 className="space-y-6"
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <Tabs.List className="inline-flex p-1.5 rounded-[16px] bg-white border border-[#E5E8EB] gap-1">
+                  <Tabs.List className="inline-flex p-1.5 rounded-[16px] bg-white border border-[#E5E8EB] gap-1 shadow-sm">
                     <Tabs.Trigger
                       value="xrd"
                       className="inline-flex items-center gap-2 min-h-[44px] px-4 sm:px-5 rounded-[12px] text-[14px] font-semibold text-[#6B7684] data-[state=active]:bg-[#3182F6] data-[state=active]:text-white transition-colors cursor-pointer"
@@ -933,13 +920,6 @@ export default function App() {
                     >
                       <Microscope className="w-4 h-4" />
                       SEM
-                    </Tabs.Trigger>
-                    <Tabs.Trigger
-                      value="report"
-                      className="inline-flex items-center gap-2 min-h-[44px] px-4 sm:px-5 rounded-[12px] text-[14px] font-semibold text-[#6B7684] data-[state=active]:bg-[#3182F6] data-[state=active]:text-white transition-colors cursor-pointer"
-                    >
-                      <FileBarChart2 className="w-4 h-4" />
-                      통합 리포트
                     </Tabs.Trigger>
                   </Tabs.List>
 
@@ -964,6 +944,7 @@ export default function App() {
                       })
                     }
                     onRerun={handleStartRun}
+                    onNavigateToIntegrated={() => setServiceMode("integrated")}
                   />
                 </Tabs.Content>
 
@@ -976,11 +957,8 @@ export default function App() {
                     isBusy={isBusy || isJobRunning}
                     onChangeParams={setSemParams}
                     onRerun={handleStartRun}
+                    onNavigateToIntegrated={() => setServiceMode("integrated")}
                   />
-                </Tabs.Content>
-
-                <Tabs.Content value="report" className="outline-none">
-                  <IntegratedAnalysisView activeProject={activeProject} activeRun={activeRun} />
                 </Tabs.Content>
               </Tabs.Root>
             )}

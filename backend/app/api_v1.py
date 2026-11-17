@@ -165,6 +165,11 @@ class PdfReportRequest(BaseModel):
     ai_interpretation: Optional[Dict[str, Any]] = None
     references: Optional[List[Dict[str, Any]]] = None
     grounding_claims: Optional[List[Dict[str, Any]]] = None
+    xrd_diffraction_data: Optional[Dict[str, Any]] = None
+    xrd_peaks: Optional[List[Dict[str, Any]]] = None
+    sem_image_base64: Optional[str] = None
+    sem_image_path: Optional[str] = None
+    sem_metrics: Optional[Dict[str, Any]] = None
 
 
 # -------------------------------------------------------------------------
@@ -481,6 +486,11 @@ def export_scientific_pdf_endpoint(req: PdfReportRequest):
         ai_interpretation=req.ai_interpretation,
         references=req.references,
         grounding_claims=req.grounding_claims,
+        xrd_diffraction_data=req.xrd_diffraction_data,
+        xrd_peaks=req.xrd_peaks,
+        sem_image_base64=req.sem_image_base64,
+        sem_image_path=req.sem_image_path,
+        sem_metrics=req.sem_metrics,
     )
     safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', req.sample_id)
     return Response(
