@@ -874,7 +874,12 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-8 py-6 sm:py-8">
         {serviceMode === "utm" ? (
-          <UtmView />
+          <UtmView
+            onNavigateToIntegrated={() => {
+              setServiceMode("integrated");
+              writeUrlState({ mode: "integrated" });
+            }}
+          />
         ) : serviceMode === "hall" ? (
           <HallView
             onNavigateToIntegrated={() => {

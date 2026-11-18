@@ -668,7 +668,25 @@ def _save_and_compute_session(req: ComparisonAnalyzeRequest) -> dict[str, Any]:
         ensure_verification_series_seeded(force_reseed=False)
         projects_by_id, runs_by_id = _load_all_projects_and_runs_from_db()
 
-    q_type = req.question_type if req.question_type in QUESTION_DEFINITIONS else "process_variation"
+    is_auto_mode = req.question_type not in QUESTION_DEFINITIONS
+    if is_auto_mode and req.slots and len(req.slots) >= 2:
+        # Infer comparison axis automatically from the selected slots' metadata
+        sel_metas = [
+            projects_by_id[s.project_id]["experiment_meta"]
+            for s in req.slots
+            if s.project_id in projects_by_id
+        ]
+        dop_els = {(m.get("dopant_element") or "").upper() for m in sel_metas}
+        dop_amts = {m.get("dopant_amount") for m in sel_metas if m.get("dopant_amount") is not None}
+        if len(dop_els - {""}) >= 2:
+            q_type = "dopant_type"
+        elif len(dop_amts) >= 2 and any(dop_els - {""}):
+            q_type = "dopant_amount"
+        else:
+            q_type = "process_variation"
+    else:
+        q_type = req.question_type if req.question_type in QUESTION_DEFINITIONS else "process_variation"
+
     cand_eval = evaluate_all_candidates_for_question(
         list(projects_by_id.values()),
         q_type,  # type: ignore[arg-type]
@@ -677,6 +695,14 @@ def _save_and_compute_session(req: ComparisonAnalyzeRequest) -> dict[str, Any]:
 
     if req.slots:
         req_slots_dicts = [s.model_dump() for s in req.slots]
+    elif is_auto_mode:
+        # In simplified single-target mode ("auto"), default to 1 representative specimen so comparison is not mandatory
+        base_pid = cand_eval.get("baseline_project_id")
+        if base_pid:
+            req_slots_dicts = [{"project_id": base_pid}]
+        else:
+            rec_ids = cand_eval.get("recommended_project_ids", [])
+            req_slots_dicts = [{"project_id": rec_ids[0]}] if rec_ids else []
     else:
         req_slots_dicts = [{"project_id": pid} for pid in cand_eval.get("recommended_project_ids", [])]
 
@@ -704,7 +730,16 @@ def _save_and_compute_session(req: ComparisonAnalyzeRequest) -> dict[str, Any]:
 
     sid = req.session_id or new_id("comp")
     now = utc_now_iso()
-    r_title = req.report_title or cand_eval.get("report_title")
+    resolved_slots_list = comp_data.get("slots", [])
+    if req.report_title:
+        r_title = req.report_title
+    elif is_auto_mode and len(resolved_slots_list) == 1:
+        s0_name = resolved_slots_list[0].get("sample_name", "선택 시편")
+        r_title = f"[통합 분석 리포트] {s0_name} — 결정구조(XRD) · 미세조직(SEM) · 기계(UTM) · 전기(Hall) · 열(LFA) 연계 분석"
+    elif is_auto_mode and len(resolved_slots_list) >= 2:
+        r_title = f"[연결 시리즈 통합 리포트] 선택 시편 {len(resolved_slots_list)}종 — 실험 조건 및 다종 측정 데이터 연계 분석"
+    else:
+        r_title = cand_eval.get("report_title")
     options_obj = {
         "norm_mode": norm_m,
         "offset_step": req.offset_step,

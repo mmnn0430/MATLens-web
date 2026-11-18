@@ -330,3 +330,131 @@ def test_5_sem_uncalibrated_scale_and_missing_sem_no_placeholder_violation(clien
     assert sem_5wt["raw_image_url"] is None
     assert "업로드된 SEM 이미지가 없습니다" in sem_5wt["status_message"]
     assert "대체하지 않음" in sem_5wt["status_message"]
+
+
+def test_6_simplified_auto_single_specimen_and_xrd_utm_hall_lfa_integration(client: TestClient):
+    """
+    신규 요구사항 통합 검증:
+    1. '1번 실험 질문 선택' 없이 question_type="auto"로 단일 시편(len(slots)==1)만으로도 즉시 리포트 생성
+    2. XRD·UTM·Hall·LFA·SEM 5종 데이터의 5단계 가독성 구조(핵심 요약 -> 측정 데이터 현황 -> 주요 지표 -> 통합 분석 -> 한계 및 추가 실험) 검증
+    3. 측정 사실 · 계산 결과 · 해석 가설 엄격 구분 및 단일 샘플(N=1) 통계 일반화 금지 안내 검증
+    4. LFA 밀도(ρ) 또는 비열(Cp) 누락 시 임의로 열전도도(κ) 및 Wiedemann-Franz를 계산하지 않고 제한사항 명시 검증
+    5. 일부 기기(UTM, Hall 등) 누락 시에도 오류 없이 확보된 범위에서 리포트 생성 검증
+    """
+    # 1) '1번 실험 질문 선택' 없이 auto 모드로 단일 시편 분석
+    auto_resp = client.post(
+        "/api/v1/comparison/analyze",
+        json={"question_type": "auto"},
+    )
+    assert auto_resp.status_code == 200
+    auto_data = auto_resp.json()
+    assert len(auto_data["slots"]) == 1
+    assert "[통합 분석 리포트]" in auto_data["report_title"]
+
+    # 2) XRD + SEM + UTM + Hall + LFA 전체 연결 분석
+    full_resp = client.post(
+        "/api/v1/analysis/integrated",
+        json={
+            "sample_id": "NbFeSb-SPS-01",
+            "material_name": "NbFeSb half-Heusler",
+            "temperature_K": 300.0,
+            "xrd_data": {
+                "sample_id": "NbFeSb-SPS-01",
+                "chemical_composition": "NbFeSb",
+                "primary_phase": "NbFeSb",
+                "space_group": "F-43m",
+                "crystallite_size_nm": 42.5,
+                "is_sample_demo": True,
+            },
+            "sem_data": {
+                "sample_id": "NbFeSb-SPS-01",
+                "chemical_composition": "NbFeSb",
+                "grain_size_um": 2.4,
+                "porosity_pct": 1.2,
+                "is_sample_demo": True,
+            },
+            "utm_data": {
+                "sample_id": "NbFeSb-SPS-01",
+                "chemical_composition": "NbFeSb",
+                "tensile_strength_MPa": 480.0,
+                "yield_strength_MPa": 412.0,
+                "elastic_modulus_GPa": 168.0,
+                "elongation_pct": 2.6,
+                "is_sample_demo": True,
+            },
+            "hall_data": {
+                "sample_id": "NbFeSb-SPS-01",
+                "chemical_composition": "NbFeSb",
+                "carrier_concentration_cm3": 4.2e20,
+                "hall_mobility_cm2_Vs": 22.0,
+                "electrical_conductivity_S_cm": 1500.0,
+                "carrier_type": "p-type (Hole)",
+                "is_sample_demo": True,
+            },
+            "lfa_data": {
+                "sample_id": "NbFeSb-SPS-01",
+                "chemical_composition": "NbFeSb",
+                "thermal_diffusivity_mm2_s": 2.08,
+                "density_g_cm3": 8.25,
+                "specific_heat_J_gK": 0.28,
+                "is_sample_demo": True,
+            },
+        },
+    )
+    assert full_resp.status_code == 200
+    full_data = full_resp.json()
+
+    assert set(full_data["instruments_included"]) == {"XRD", "SEM", "UTM", "Hall", "LFA"}
+    assert 3 <= len(full_data["executive_summary_items"]) <= 5
+    assert full_data["linkage_assessment"]["linkage_mode"] == "same_specimen"
+    assert len(full_data["instrument_availability"]) == 5
+    assert len(full_data["key_metrics_table"]) >= 8
+    assert len(full_data["cross_correlations"]) >= 3
+    for corr in full_data["cross_correlations"]:
+        assert len(corr["measured_facts"]) >= 1
+        assert len(corr["calculated_results"]) >= 1
+        assert len(corr["interpretation_hypotheses"]) >= 1
+    assert full_data["wiedemann_franz"] is not None
+
+    # 3) LFA 밀도(ρ) 누락 및 UTM/Hall 미입력(부분 데이터) 시 열전도도 임의 계산 금지 및 정상 리포트 생성
+    partial_resp = client.post(
+        "/api/v1/analysis/integrated",
+        json={
+            "sample_id": "NbFeSb-SPS-01",
+            "material_name": "NbFeSb half-Heusler",
+            "temperature_K": 300.0,
+            "xrd_data": {
+                "sample_id": "NbFeSb-SPS-01",
+                "chemical_composition": "NbFeSb",
+                "primary_phase": "NbFeSb",
+                "space_group": "F-43m",
+                "crystallite_size_nm": 42.5,
+            },
+            "sem_data": None,
+            "utm_data": None,
+            "hall_data": {
+                "sample_id": "NbFeSb-SPS-01",
+                "chemical_composition": "NbFeSb",
+                "carrier_concentration_cm3": 4.2e20,
+                "hall_mobility_cm2_Vs": 22.0,
+                "electrical_conductivity_S_cm": 1500.0,
+                "carrier_type": "p-type",
+            },
+            "lfa_data": {
+                "sample_id": "NbFeSb-SPS-01",
+                "chemical_composition": "NbFeSb",
+                "thermal_diffusivity_mm2_s": 2.08,
+                "density_g_cm3": None,
+                "specific_heat_J_gK": 0.28,
+            },
+        },
+    )
+    assert partial_resp.status_code == 200
+    partial_data = partial_resp.json()
+    # 밀도(density_g_cm3)가 없으므로 열전도도(κ) 및 Wiedemann-Franz가 임의로 계산되지 않아야 함
+    assert partial_data["wiedemann_franz"] is None
+    assert any("밀도" in w and "비열" in w for w in partial_data["warnings"])
+    assert any(
+        "UTM" in lim for lim in partial_data["limitations_and_next_actions"]["cannot_determine_now"]
+    )
+

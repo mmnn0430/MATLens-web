@@ -416,13 +416,66 @@ export interface IntegratedAnalysisResult {
   sem_hall_correlation: any | null;
   sem_lfa_correlation: any | null;
   xrd_hall_correlation: any | null;
+  xrd_utm_correlation?: any | null;
   synthesis_to_properties_chain: { stage: string; description: string; data_source: string }[];
   grounded_claims: GroundedClaim[];
   warnings: string[];
   notes: string[];
+  executive_summary_items?: Array<{ type: "finding" | "caution"; badge: string; text: string }>;
+  linkage_assessment?: {
+    linkage_mode: "same_specimen" | "connected_series" | "unverified_mismatch";
+    linkage_badge: string;
+    linkage_summary: string;
+    sample_count_n: number;
+    is_single_sample: boolean;
+    criteria_checked: string[];
+    mismatches: string[];
+    sources: Array<{
+      instrument: string;
+      sample_id: string;
+      composition: string;
+      process_condition: string;
+      temperature_K: number;
+      is_sample_demo: boolean;
+      source_file: string;
+    }>;
+  };
+  instrument_availability?: Array<{
+    instrument: string;
+    label: string;
+    available: boolean;
+    status_badge: string;
+    data_source_badge: string;
+    summary: string;
+    missing_impact: string | null;
+  }>;
+  key_metrics_table?: Array<{
+    instrument: string;
+    metric_name: string;
+    value: string;
+    unit: string;
+    condition: string;
+    category: "측정 사실" | "계산 결과";
+    source_label: string;
+    term_explanation: string;
+  }>;
+  cross_correlations?: Array<{
+    id: string;
+    title: string;
+    instruments: string[];
+    basis_condition: string;
+    measured_facts: string[];
+    calculated_results: string[];
+    interpretation_hypotheses: string[];
+    caution_note: string;
+  }>;
+  limitations_and_next_actions?: {
+    cannot_determine_now: string[];
+    recommended_next_steps: string[];
+  };
 }
 
-export type ComparisonQuestionType = "process_variation" | "dopant_type" | "dopant_amount";
+export type ComparisonQuestionType = "auto" | "process_variation" | "dopant_type" | "dopant_amount";
 
 export interface ExperimentMeta {
   base_matrix: string;
