@@ -114,73 +114,56 @@ export function UniversalBatchPlatformView() {
 
   return (
     <div className="space-y-6">
-      {/* Top Banner */}
-      <div className="rounded-[20px] bg-gradient-to-r from-[#1E293B] via-[#0F172A] to-[#1E3A8A] text-white p-6 sm:p-8 shadow-md">
-        <div className="max-w-4xl space-y-2">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-bold bg-[#3182F6]/30 text-[#93C5FD] border border-[#3182F6]/40">
-            <Sparkles className="w-3.5 h-3.5" />
-            Universal Batch Architecture 2.0
-          </div>
-          <h1 className="text-[22px] sm:text-[26px] font-extrabold tracking-tight">
-            복수 데이터 일괄 분석 및 비교 플랫폼 (Batch Comparison Platform)
-          </h1>
-          <p className="text-[14px] text-[#94A3B8] leading-relaxed">
-            단일 기기 분석을 넘어, 열처리 조건 · 시편 위치 · 반복 시험에 따른 복수 측정 데이터를 단일 화면에서
-            중첩 및 정량 비교합니다. 플러그인 어댑터 패턴으로 XRD, UTM, SEM은 물론 DSC, TGA, FTIR 등 차세대 기기까지
-            유연하게 수용합니다.
-          </p>
-        </div>
+      {/* Simple Header */}
+      <h2 className="text-xl font-bold text-[#191F28] py-4">MatLens Batch Analyzer</h2>
 
-        {/* Instrument Mode Selector Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2.5 mt-6">
-          {instrumentButtons.map((btn) => {
-            const isActive = activeInstrument === btn.type;
-            const count = (datasetsByInstrument[btn.type] || []).length;
-            return (
-              <button
-                key={btn.type}
-                type="button"
-                onClick={() => setActiveInstrument(btn.type)}
-                className={`p-3.5 rounded-[14px] text-left transition-all cursor-pointer flex flex-col justify-between border ${
-                  isActive
-                    ? "bg-white text-[#191F28] shadow-lg border-white scale-[1.02]"
-                    : "bg-white/10 text-white/90 border-white/10 hover:bg-white/15"
-                }`}
-              >
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
+      {/* Instrument Mode Selector Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2.5 mt-6">
+        {instrumentButtons.map((btn) => {
+          const isActive = activeInstrument === btn.type;
+          const count = (datasetsByInstrument[btn.type] || []).length;
+          return (
+            <button
+              key={btn.type}
+              type="button"
+              onClick={() => setActiveInstrument(btn.type)}
+              className={`p-3.5 rounded-[14px] text-left transition-all cursor-pointer flex flex-col justify-between border ${
+                isActive
+                  ? "bg-white text-[#191F28] shadow-lg border-white scale-[1.02]"
+                  : "bg-white/10 text-white/90 border-white/10 hover:bg-white/15"
+              }`}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span
+                    className="p-1.5 rounded-lg inline-flex"
+                    style={{
+                      backgroundColor: isActive ? `${btn.color}20` : "rgba(255,255,255,0.15)",
+                      color: isActive ? btn.color : "#FFFFFF",
+                    }}
+                  >
+                    {btn.icon}
+                  </span>
+                  {count > 0 && (
                     <span
-                      className="p-1.5 rounded-lg inline-flex"
-                      style={{
-                        backgroundColor: isActive ? `${btn.color}20` : "rgba(255,255,255,0.15)",
-                        color: isActive ? btn.color : "#FFFFFF",
-                      }}
+                      className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                        isActive ? "bg-[#3182F6] text-white" : "bg-white/20 text-white"
+                      }`}
                     >
-                      {btn.icon}
+                      {count}개
                     </span>
-                    {count > 0 && (
-                      <span
-                        className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
-                          isActive ? "bg-[#3182F6] text-white" : "bg-white/20 text-white"
-                        }`}
-                      >
-                        {count}개
-                      </span>
-                    )}
-                  </div>
-                  <div className="font-bold text-[13px]">{btn.label}</div>
+                  )}
                 </div>
+                <div className="font-bold text-[13px]">{btn.label}</div>
                 <div
-                  className={`text-[11px] mt-1.5 line-clamp-1 ${
-                    isActive ? "text-[#6B7684]" : "text-white/60"
-                  }`}
+                  className={`text-[11px] mt-1.5 line-clamp-1 ${isActive ? "text-[#6B7684]" : "text-white/60"}`}
                 >
                   {btn.sub}
                 </div>
-              </button>
-            );
-          })}
-        </div>
+              </div>
+            </button>
+          );
+        })}
       </div>
 
       {/* Common Universal Batch Uploader */}

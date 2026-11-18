@@ -24,7 +24,6 @@ import type { UniversalDataset, UtmBatchAnalysisResult } from "../core/batch/typ
 import { utmAdapter } from "../core/batch/adapters/utmAdapter";
 
 export function UtmView() {
-  const [workflowMode, setWorkflowMode] = useState<"single" | "batch">("single");
   const [batchDatasets, setBatchDatasets] = useState<UniversalDataset<any, UtmBatchAnalysisResult>[]>([]);
   const [, setFile] = useState<File | null>(null);
   const [parsedData, setParsedData] = useState<UTMParsedData | null>(null);
@@ -379,60 +378,26 @@ export function UtmView() {
         </div>
       </div>
 
-      {/* Workflow Mode Tabs */}
-      <div className="flex items-center gap-2 border-b border-[#E5E8EB] pb-2">
-        <button
-          type="button"
-          onClick={() => setWorkflowMode("single")}
-          className={`flex items-center gap-2 px-4 py-2 rounded-[10px] text-[14px] font-bold transition-all ${
-            workflowMode === "single"
-              ? "bg-[#3182F6] text-white shadow-sm"
-              : "text-[#6B7684] hover:bg-[#F2F4F6] hover:text-[#191F28]"
-          }`}
-        >
-          <Activity className="w-4 h-4" />
-          단일 시편 정밀 분석
-        </button>
+      {/* Unified Uploader (Accepts 1 or Multiple Files Seamlessly) */}
+      <UniversalBatchUploader
+        instrumentType="UTM"
+        datasets={batchDatasets}
+        onDatasetsChange={setBatchDatasets}
+      />
 
-        <button
-          type="button"
-          onClick={() => {
-            setWorkflowMode("batch");
-            if (batchDatasets.length === 0 && utmAdapter.createSampleDatasets) {
-              utmAdapter.createSampleDatasets().then(setBatchDatasets);
-            }
+      {/* Multi / Single-Specimen Universal Comparison Plotter & Summary */}
+      {batchDatasets.length > 0 && (
+        <UtmBatchComparisonView
+          datasets={batchDatasets}
+          onToggleVisible={(id) => {
+            setBatchDatasets((prev) =>
+              prev.map((d) => (d.id === id ? { ...d, visible: !d.visible } : d))
+            );
           }}
-          className={`flex items-center gap-2 px-4 py-2 rounded-[10px] text-[14px] font-bold transition-all ${
-            workflowMode === "batch"
-              ? "bg-[#3182F6] text-white shadow-sm"
-              : "text-[#6B7684] hover:bg-[#F2F4F6] hover:text-[#191F28]"
-          }`}
-        >
-          <Layers className="w-4 h-4" />
-          복수 시편 중첩 비교 (Universal Batch)
-          <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-[#10B981] text-white font-semibold">신규</span>
-        </button>
-      </div>
+        />
+      )}
 
-      {workflowMode === "batch" ? (
-        <div className="space-y-6">
-          <UniversalBatchUploader
-            instrumentType="UTM"
-            datasets={batchDatasets}
-            onDatasetsChange={setBatchDatasets}
-          />
-          <UtmBatchComparisonView
-            datasets={batchDatasets}
-            onToggleVisible={(id) => {
-              setBatchDatasets((prev) =>
-                prev.map((d) => (d.id === id ? { ...d, visible: !d.visible } : d))
-              );
-            }}
-          />
-        </div>
-      ) : (
-        <>
-          {/* Error Banner */}
+      {/* Error Banner */}
       {errorMsg && (
         <div className="rounded-[16px] bg-[#FEE2E2] border border-[#FECACA] p-4 text-[13px] text-[#DC2626] flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -449,41 +414,10 @@ export function UtmView() {
         </div>
       )}
 
-      {/* File Drop Area if no data parsed */}
-      {!parsedData && (
-        <div
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault();
-            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-              handleFileChange(e.dataTransfer.files[0]);
-            }
-          }}
-          className="border-2 border-dashed border-[#D1D5DB] rounded-[24px] p-12 text-center bg-white/60 hover:bg-white hover:border-[#3182F6] transition-all cursor-pointer"
-          onClick={() => {
-            const input = document.createElement("input");
-            input.type = "file";
-            input.accept = ".txt,.csv,.tsv,.dat";
-            input.onchange = (e: any) => {
-              if (e.target.files && e.target.files[0]) {
-                handleFileChange(e.target.files[0]);
-              }
-            };
-            input.click();
-          }}
-        >
-          <div className="w-14 h-14 rounded-full bg-[#EFF6FF] text-[#3182F6] flex items-center justify-center mx-auto mb-4">
-            <Upload className="w-7 h-7" />
-          </div>
-          <div className="text-[17px] font-bold text-[#191F28] mb-1">
-            UTM Raw Data 파일(TXT, CSV, TSV)을 이곳에 끌어다 놓으세요
-          </div>
-          <p className="text-[13px] text-[#8B95A1] max-w-md mx-auto mb-4">
-            공백·탭·쉼표 구분자, 열 이름 및 단위 행 분리 자동 인식, UTF-8 및 CP949 인코딩을 자동 지원합니다.
-          </p>
-          <Button variant="outline" size="sm">
-            컴퓨터에서 파일 선택
-          </Button>
+      {/* Legacy Single Mode Controls (Optional fine-tune when exactly 1 file is selected) */}
+      {batchDatasets.length === 0 && !parsedData && (
+        <div className="py-8 text-center text-[#8B95A1] text-[14px]">
+          상단 업로드 영역에 UTM 파일(.txt, .csv, .dat)을 1개 또는 여러 개 끌어다 놓으세요. 자동으로 분석 및 중첩 비교됩니다.
         </div>
       )}
 
@@ -946,8 +880,6 @@ export function UtmView() {
             )}
           </div>
         </div>
-      )}
-      </>
       )}
     </div>
   );
