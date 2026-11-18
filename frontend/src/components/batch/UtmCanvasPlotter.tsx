@@ -87,9 +87,9 @@ export function UtmCanvasPlotter({
     maxX *= 1.08;
     maxY *= 1.08;
 
-    // Coordinate conversion
-    const scaleX = (x: number) => m.left + (x / maxX) * plotW;
-    const scaleY = (y: number) => m.top + plotH - (y / maxY) * plotH;
+    // Coordinate conversion (clamped to plot area so curves never bleed past axis bounds)
+    const scaleX = (x: number) => m.left + (Math.max(0, x) / maxX) * plotW;
+    const scaleY = (y: number) => m.top + plotH - (Math.max(0, y) / maxY) * plotH;
     const invScaleX = (px: number) => ((px - m.left) / plotW) * maxX;
 
     // Gridlines & Ticks
@@ -152,6 +152,14 @@ export function UtmCanvasPlotter({
     ctx.restore();
 
     // -------------------------------------------------------------
+    // Clip to plot area: Curves and bands NEVER bleed outside axes
+    // -------------------------------------------------------------
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(m.left, m.top, plotW, plotH);
+    ctx.clip();
+
+    // -------------------------------------------------------------
     // Calculate Mean Curve and Std Dev Band across visible datasets
     // -------------------------------------------------------------
     if ((showMeanCurve || showStdDevBand) && visibleDatasets.length >= 2) {
@@ -180,16 +188,16 @@ export function UtmCanvasPlotter({
             if (idx < xArr.length - 1) {
               const x0 = xArr[idx];
               const x1 = xArr[idx + 1];
-              const y0 = yArr[idx];
-              const y1 = yArr[idx + 1];
+              const y0 = Math.max(0, yArr[idx]);
+              const y1 = Math.max(0, yArr[idx + 1]);
               const t = (x - x0) / (x1 - x0 || 1);
-              interpolatedY.push(y0 + t * (y1 - y0));
+              interpolatedY.push(Math.max(0, y0 + t * (y1 - y0)));
             }
           }
         });
 
         if (interpolatedY.length >= 2) {
-          const mean = interpolatedY.reduce((a, b) => a + b, 0) / interpolatedY.length;
+          const mean = Math.max(0, interpolatedY.reduce((a, b) => a + b, 0) / interpolatedY.length);
           const variance =
             interpolatedY.reduce((a, b) => a + Math.pow(b - mean, 2), 0) /
             (interpolatedY.length - 1);
@@ -259,7 +267,7 @@ export function UtmCanvasPlotter({
     }
 
     // -------------------------------------------------------------
-    // Draw Individual Specimen Curves
+    // Draw Individual Specimen Curves (Clamped & Clipped)
     // -------------------------------------------------------------
     visibleDatasets.forEach((d) => {
       const c = d.analysisResult!.curves;
@@ -279,6 +287,9 @@ export function UtmCanvasPlotter({
       }
       ctx.stroke();
     });
+
+    // End Clipping Region
+    ctx.restore();
 
     // -------------------------------------------------------------
     // Draw Multi-Crosshair if mouse hover is active

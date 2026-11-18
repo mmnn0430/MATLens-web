@@ -6,7 +6,6 @@ import {
   Flame,
   Binary,
   Radio,
-  Sparkles,
 } from "lucide-react";
 import type { InstrumentType, UniversalDataset } from "../../core/batch/types";
 import { getInstrumentAdapter } from "../../core/batch/adapters";
@@ -17,8 +16,27 @@ import { SemBatchComparisonView } from "./SemBatchComparisonView";
 import { PlotlyChart } from "../PlotlyChart";
 import { Card } from "../ui/primitives";
 
-export function UniversalBatchPlatformView() {
-  const [activeInstrument, setActiveInstrument] = useState<InstrumentType>("XRD");
+interface UniversalBatchPlatformViewProps {
+  currentInstrument?: InstrumentType;
+  onInstrumentChange?: (inst: InstrumentType) => void;
+  onCountsChange?: (counts: Record<InstrumentType, number>) => void;
+}
+
+export function UniversalBatchPlatformView({
+  currentInstrument,
+  onInstrumentChange,
+  onCountsChange,
+}: UniversalBatchPlatformViewProps = {}) {
+  const [internalInstrument, setInternalInstrument] = useState<InstrumentType>("XRD");
+  const activeInstrument = currentInstrument ?? internalInstrument;
+
+  const setActiveInstrument = (type: InstrumentType) => {
+    setInternalInstrument(type);
+    if (onInstrumentChange) {
+      onInstrumentChange(type);
+    }
+  };
+
   // Per-instrument datasets storage
   const [datasetsByInstrument, setDatasetsByInstrument] = useState<
     Record<InstrumentType, UniversalDataset[]>
@@ -32,6 +50,17 @@ export function UniversalBatchPlatformView() {
     LFA: [],
     GENERIC: [],
   });
+
+  // Notify parent of counts
+  useEffect(() => {
+    if (onCountsChange) {
+      const counts: any = {};
+      Object.keys(datasetsByInstrument).forEach((k) => {
+        counts[k] = (datasetsByInstrument[k as InstrumentType] || []).length;
+      });
+      onCountsChange(counts);
+    }
+  }, [datasetsByInstrument, onCountsChange]);
 
   const activeDatasets = datasetsByInstrument[activeInstrument] || [];
 
@@ -61,119 +90,47 @@ export function UniversalBatchPlatformView() {
     }
   }, []);
 
-  const instrumentButtons: {
-    type: InstrumentType;
-    label: string;
-    sub: string;
-    icon: React.ReactNode;
-    color: string;
-  }[] = [
-    {
-      type: "XRD",
-      label: "XRD 다중 회절 스펙트럼",
-      sub: "중첩/폭포수 뷰, Δ2θ 피크 이동, 상분율(%)",
-      icon: <Layers className="w-4 h-4" />,
-      color: "#3182F6",
-    },
-    {
-      type: "UTM",
-      label: "UTM 인장시험 곡선",
-      sub: "2D Canvas 중첩, 멀티 툴팁, Mean ± SD 통계표",
-      icon: <Activity className="w-4 h-4" />,
-      color: "#10B981",
-    },
-    {
-      type: "SEM",
-      label: "SEM 미세조직 이미지",
-      sub: "나란히 비교, D10/D50/D90, 조건부 풀링 통계",
-      icon: <Microscope className="w-4 h-4" />,
-      color: "#8B5CF6",
-    },
-    {
-      type: "DSC",
-      label: "DSC 열분석 (확장)",
-      sub: "유리전이/융해 엔탈피 피크 비교",
-      icon: <Flame className="w-4 h-4" />,
-      color: "#F59E0B",
-    },
-    {
-      type: "TGA",
-      label: "TGA 열중량분석 (확장)",
-      sub: "온도별 질량 감량 곡선 비교",
-      icon: <Binary className="w-4 h-4" />,
-      color: "#EC4899",
-    },
-    {
-      type: "FTIR",
-      label: "FTIR 적외선분광 (확장)",
-      sub: "작용기 흡수 피크 위치 비교",
-      icon: <Radio className="w-4 h-4" />,
-      color: "#06B6D4",
-    },
-  ];
-
   return (
     <div className="space-y-6">
-      {/* Simple Header */}
-      <h2 className="text-xl font-bold text-[#191F28] py-4">MatLens Batch Analyzer</h2>
 
-      {/* Instrument Mode Selector Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2.5 mt-6">
-        {instrumentButtons.map((btn) => {
-          const isActive = activeInstrument === btn.type;
-          const count = (datasetsByInstrument[btn.type] || []).length;
-          return (
-            <button
-              key={btn.type}
-              type="button"
-              onClick={() => setActiveInstrument(btn.type)}
-              className={`p-3.5 rounded-[14px] text-left transition-all cursor-pointer flex flex-col justify-between border ${
-                isActive
-                  ? "bg-white text-[#191F28] shadow-lg border-white scale-[1.02]"
-                  : "bg-white/10 text-white/90 border-white/10 hover:bg-white/15"
-              }`}
-            >
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span
-                    className="p-1.5 rounded-lg inline-flex"
-                    style={{
-                      backgroundColor: isActive ? `${btn.color}20` : "rgba(255,255,255,0.15)",
-                      color: isActive ? btn.color : "#FFFFFF",
-                    }}
-                  >
-                    {btn.icon}
-                  </span>
-                  {count > 0 && (
-                    <span
-                      className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
-                        isActive ? "bg-[#3182F6] text-white" : "bg-white/20 text-white"
-                      }`}
-                    >
-                      {count}개
-                    </span>
-                  )}
-                </div>
-                <div className="font-bold text-[13px]">{btn.label}</div>
-                <div
-                  className={`text-[11px] mt-1.5 line-clamp-1 ${isActive ? "text-[#6B7684]" : "text-white/60"}`}
-                >
-                  {btn.sub}
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </div>
+      {/* UTM 모드 헤더 안내 */}
+      {activeInstrument === "UTM" && (
+        <div className="flex items-center justify-between pb-1">
+          <div className="flex items-center gap-2 text-[#191F28] font-bold text-[16px]">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#10B981]"></span>
+            <span>UTM 만능재료시험기 인장/압축 시험</span>
+          </div>
+          <span className="text-[12px] text-[#6B7684]">
+            복수 시편 응력-변형률(Stress-Strain) 곡선 중첩 및 Mean ± SD 통계표 산출
+          </span>
+        </div>
+      )}
 
-      {/* Common Universal Batch Uploader */}
+      {/* DSC / TGA / FTIR 헤더 안내 */}
+      {["DSC", "TGA", "FTIR"].includes(activeInstrument) && (
+        <div className="flex items-center justify-between pb-1">
+          <div className="flex items-center gap-2 text-[#191F28] font-bold text-[16px]">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#F59E0B]"></span>
+            <span>
+              {activeInstrument === "DSC" && "DSC 시차주사열량분석 (Differential Scanning Calorimetry)"}
+              {activeInstrument === "TGA" && "TGA 열중량분석 (Thermogravimetric Analysis)"}
+              {activeInstrument === "FTIR" && "FTIR 푸리에변환 적외선분광분석"}
+            </span>
+          </div>
+          <span className="text-[12px] text-[#6B7684]">
+            복수 열분석/분광 데이터(.csv, .txt) 일괄 비교 및 중첩 플롯
+          </span>
+        </div>
+      )}
+
+      {/* 공통 Universal Batch 업로더 (단일/복수 파일 모두 완벽 지원) */}
       <UniversalBatchUploader
         instrumentType={activeInstrument}
         datasets={activeDatasets}
         onDatasetsChange={handleDatasetsChange}
       />
 
-      {/* Comparison Engine Renderers */}
+      {/* 기기별 분석 및 비교 렌더러 */}
       {activeInstrument === "XRD" && (
         <XrdBatchComparisonView datasets={activeDatasets} />
       )}
@@ -189,7 +146,7 @@ export function UniversalBatchPlatformView() {
         <SemBatchComparisonView datasets={activeDatasets} />
       )}
 
-      {/* Generic Thermal/Spectroscopy Plotter (DSC / TGA / FTIR) */}
+      {/* 열분석 / 분광학 확장 플롯 (DSC / TGA / FTIR) */}
       {["DSC", "TGA", "FTIR", "LFA", "GENERIC"].includes(activeInstrument) && (
         <GenericBatchComparisonView
           instrumentType={activeInstrument}

@@ -85,52 +85,52 @@ export function UniversalBatchUploader({
         };
       });
 
-      const updated = [...datasets, ...newItems];
-      onDatasetsChange(updated);
+      let currentList = [...datasets, ...newItems];
+      onDatasetsChange(currentList);
 
-      // Trigger asynchronous parsing and analysis for each new file
+      // Trigger asynchronous parsing and analysis for all new files
       for (const item of newItems) {
         try {
-          // Set status to parsing
-          onDatasetsChange(
-            updated.map((d) => (d.id === item.id ? { ...d, status: "parsing", progress: 40 } : d))
+          // 1. Parsing status
+          currentList = currentList.map((d) =>
+            d.id === item.id ? { ...d, status: "parsing", progress: 40 } : d
           );
+          onDatasetsChange([...currentList]);
 
           const raw = await adapter.parseData(item.file!);
 
-          // Set status to analyzing
-          onDatasetsChange(
-            updated.map((d) => (d.id === item.id ? { ...d, rawData: raw, status: "analyzing", progress: 75 } : d))
+          // 2. Analyzing status
+          currentList = currentList.map((d) =>
+            d.id === item.id ? { ...d, rawData: raw, status: "analyzing", progress: 75 } : d
           );
+          onDatasetsChange([...currentList]);
 
           const analysis = await adapter.analyzeData(raw, undefined, item.file);
 
-          // Success
-          onDatasetsChange(
-            updated.map((d) =>
-              d.id === item.id
-                ? {
-                    ...d,
-                    rawData: raw,
-                    analysisResult: analysis,
-                    status: "success",
-                    progress: 100,
-                  }
-                : d
-            )
+          // 3. Success status with results
+          currentList = currentList.map((d) =>
+            d.id === item.id
+              ? {
+                  ...d,
+                  rawData: raw,
+                  analysisResult: analysis,
+                  status: "success",
+                  progress: 100,
+                }
+              : d
           );
+          onDatasetsChange([...currentList]);
         } catch (err: any) {
-          onDatasetsChange(
-            updated.map((d) =>
-              d.id === item.id
-                ? {
-                    ...d,
-                    status: "error",
-                    errorMessage: err?.message || "파싱/분석 실패",
-                  }
-                : d
-            )
+          currentList = currentList.map((d) =>
+            d.id === item.id
+              ? {
+                  ...d,
+                  status: "error",
+                  errorMessage: err?.message || "파싱/분석 실패",
+                }
+              : d
           );
+          onDatasetsChange([...currentList]);
         }
       }
     },
