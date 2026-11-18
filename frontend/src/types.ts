@@ -108,6 +108,7 @@ export interface ProjectDetail {
   expected_formula: string;
   is_same_sample: boolean;
   is_sample_demo: boolean;
+  experiment_meta?: ExperimentMeta;
   current_conditions: {
     xrd_params?: Partial<XRDParams>;
     sem_params?: Partial<SEMParams>;
@@ -129,6 +130,7 @@ export interface ProjectListItem {
   expected_elements: string[];
   is_same_sample: boolean;
   is_sample_demo: boolean;
+  experiment_meta?: ExperimentMeta;
   file_roles: string[];
   run_count: number;
   updated_at: string;
@@ -285,5 +287,209 @@ export interface UTMAnalysisResult {
   };
   summary_text: string;
   curves: UTMCurves;
+}
+
+
+// ==========================================
+// MatLens 2.0: Hall, LFA, RAG & Integrated
+// ==========================================
+export interface HallAnalysisResult {
+  slope_dV_dB: number;
+  r_squared: number;
+  hall_coefficient_m3_C: number;
+  hall_coefficient_cm3_C: number;
+  carrier_type: string;
+  carrier_concentration_cm3: number;
+  carrier_concentration_m3: number;
+  sheet_carrier_density_cm2: number;
+  hall_mobility_cm2_Vs: number | null;
+  electrical_conductivity_S_cm: number | null;
+  resistivity_Ohm_cm: number | null;
+  sheet_resistance_Ohm_sq: number | null;
+  uncertainty_carrier_pct: number;
+  uncertainty_mobility_pct: number;
+  raw_b_field: number[];
+  raw_v_hall: number[];
+  antisym_b_field: number[];
+  antisym_v_hall: number[];
+  fitted_v_hall: number[];
+  longitudinal_offset_mV: number;
+  offset_ratio_pct: number;
+  warnings: string[];
+  notes: string[];
+}
+
+export interface LfaAnalysisResult {
+  half_rise_time_s: number;
+  thermal_diffusivity_mm2_s: number;
+  thermal_diffusivity_m2_s: number;
+  thickness_mm: number;
+  baseline_temp_C: number;
+  max_temp_rise_C: number;
+  thermal_conductivity_W_mK: number | null;
+  density_g_cm3: number | null;
+  specific_heat_J_gK: number | null;
+  is_literature_density: boolean;
+  is_literature_cp: boolean;
+  missing_inputs: string[];
+  time_series_s: number[];
+  temp_series_C: number[];
+  fitted_time_s: number[];
+  fitted_temp_C: number[];
+  heat_loss_ratio: number;
+  uncertainty_diffusivity_pct: number;
+  uncertainty_conductivity_pct: number;
+  warnings: string[];
+  notes: string[];
+}
+
+export interface LiteratureReference {
+  id: string;
+  doi: string;
+  title: string;
+  authors: string[];
+  journal: string;
+  year: number;
+  is_open_access?: boolean;
+  oa_url?: string;
+  relevance_score?: number;
+  category_code?: number;
+  category_label?: string;
+  evidence_location?: string;
+  key_claims?: string[];
+  is_verified_doi?: boolean;
+}
+
+export interface GroundedClaim {
+  claim_text: string;
+  category: "Measured Fact" | "Calculated Result" | "Literature-Supported" | "Hypothesis" | "Insufficient Evidence";
+  source_id?: string;
+  doi?: string;
+  evidence_location?: string;
+  confidence: "High" | "Moderate" | "Low";
+  limitation_note?: string;
+}
+
+export interface GroundingData {
+  pipeline_status: string;
+  pipeline_log: { step: number; name: string; status: string; details: any }[];
+  verified_references: LiteratureReference[];
+  grounded_claims: GroundedClaim[];
+  top_benchmark_paper?: LiteratureReference;
+}
+
+export interface ScientificInterpretation {
+  analysis_summary: string;
+  input_data_summary: string;
+  data_quality_assessment: string;
+  calculated_properties: string;
+  graph_interpretation: string;
+  composition_processing_interpretation: string;
+  literature_comparison: string;
+  mechanism_discussion: string;
+  alternative_explanations: string;
+  limitations_and_uncertainty: string;
+  suggested_additional_experiments: string[];
+  references: { id: string; doi: string; title: string; verified: boolean }[];
+  ai_engine?: string;
+}
+
+export interface WiedemannFranzResult {
+  temperature_K: number;
+  lorenz_number_W_Ohm_K2: number;
+  is_sommerfeld_limit: boolean;
+  total_thermal_conductivity_W_mK: number;
+  electronic_thermal_conductivity_W_mK: number;
+  lattice_thermal_conductivity_W_mK: number;
+  electronic_fraction_pct: number;
+  lattice_fraction_pct: number;
+  dominant_mechanism: string;
+  warnings: string[];
+}
+
+export interface IntegratedAnalysisResult {
+  sample_id: string;
+  material_name: string;
+  instruments_included: string[];
+  wiedemann_franz: WiedemannFranzResult | null;
+  xrd_sem_correlation: any | null;
+  sem_hall_correlation: any | null;
+  sem_lfa_correlation: any | null;
+  xrd_hall_correlation: any | null;
+  xrd_utm_correlation?: any | null;
+  synthesis_to_properties_chain: { stage: string; description: string; data_source: string }[];
+  grounded_claims: GroundedClaim[];
+  warnings: string[];
+  notes: string[];
+  executive_summary_items?: Array<{ type: "finding" | "caution"; badge: string; text: string }>;
+  linkage_assessment?: {
+    linkage_mode: "same_specimen" | "connected_series" | "unverified_mismatch";
+    linkage_badge: string;
+    linkage_summary: string;
+    sample_count_n: number;
+    is_single_sample: boolean;
+    criteria_checked: string[];
+    mismatches: string[];
+    sources: Array<{
+      instrument: string;
+      sample_id: string;
+      composition: string;
+      process_condition: string;
+      temperature_K: number;
+      is_sample_demo: boolean;
+      source_file: string;
+    }>;
+  };
+  instrument_availability?: Array<{
+    instrument: string;
+    label: string;
+    available: boolean;
+    status_badge: string;
+    data_source_badge: string;
+    summary: string;
+    missing_impact: string | null;
+  }>;
+  key_metrics_table?: Array<{
+    instrument: string;
+    metric_name: string;
+    value: string;
+    unit: string;
+    condition: string;
+    category: "측정 사실" | "계산 결과";
+    source_label: string;
+    term_explanation: string;
+  }>;
+  cross_correlations?: Array<{
+    id: string;
+    title: string;
+    instruments: string[];
+    basis_condition: string;
+    measured_facts: string[];
+    calculated_results: string[];
+    interpretation_hypotheses: string[];
+    caution_note: string;
+  }>;
+  limitations_and_next_actions?: {
+    cannot_determine_now: string[];
+    recommended_next_steps: string[];
+  };
+}
+
+export type ComparisonQuestionType = "auto" | "process_variation" | "dopant_type" | "dopant_amount";
+
+export interface ExperimentMeta {
+  base_matrix: string;
+  nominal_composition: string;
+  dopant_element: string;
+  dopant_amount: number | null;
+  dopant_unit: string;
+  process_temp_c: number | null;
+  process_time_h: number | null;
+  atmosphere: string;
+  process_method: string;
+  replicate_id: string;
+  is_synthetic_demo?: boolean;
+  explicitly_saved?: boolean;
+  missing_fields?: string[];
 }
 

@@ -18,7 +18,11 @@ import type {
 } from "../types";
 import { Button, Card } from "./ui/primitives";
 
-export function UtmView() {
+interface UtmViewProps {
+  onNavigateToIntegrated?: () => void;
+}
+
+export function UtmView({ onNavigateToIntegrated }: UtmViewProps = {}) {
   const [, setFile] = useState<File | null>(null);
   const [parsedData, setParsedData] = useState<UTMParsedData | null>(null);
   const [analysisResult, setAnalysisResult] = useState<UTMAnalysisResult | null>(null);
@@ -79,6 +83,23 @@ export function UtmView() {
       const res = await api.analyzeUtm(request);
       setAnalyzedRequest(request);
       setAnalysisResult(res);
+      try {
+        localStorage.setItem(
+          "matlens_shared_utm_data",
+          JSON.stringify({
+            sample_id: selectedFile.name.replace(/\.[^/.]+$/, ""),
+            source_file: selectedFile.name,
+            tensile_strength_MPa: res.peak_stress?.stress_MPa ?? null,
+            yield_strength_MPa: res.offset_yield?.is_valid ? res.offset_yield.yield_stress_MPa : null,
+            elastic_modulus_GPa: res.elastic_modulus?.is_valid ? res.elastic_modulus.E_GPa : null,
+            elongation_pct: res.peak_stress?.strain_pct ?? null,
+            is_sample_demo: selectedFile.name.includes("benchmark") || selectedFile.name.includes("sample"),
+            timestamp: new Date().toISOString(),
+          })
+        );
+      } catch {
+        // ignore storage error
+      }
     } catch (err: any) {
       setErrorMsg(err?.message || "파일 파싱에 실패했습니다.");
     } finally {
@@ -112,6 +133,23 @@ export function UtmView() {
       const res = await api.analyzeUtm(request);
       setAnalyzedRequest(request);
       setAnalysisResult(res);
+      try {
+        localStorage.setItem(
+          "matlens_shared_utm_data",
+          JSON.stringify({
+            sample_id: analysisName || parsedData.filename || "UTM-Sample",
+            source_file: parsedData.filename || "UTM 데이터",
+            tensile_strength_MPa: res.peak_stress?.stress_MPa ?? null,
+            yield_strength_MPa: res.offset_yield?.is_valid ? res.offset_yield.yield_stress_MPa : null,
+            elastic_modulus_GPa: res.elastic_modulus?.is_valid ? res.elastic_modulus.E_GPa : null,
+            elongation_pct: res.peak_stress?.strain_pct ?? null,
+            is_sample_demo: Boolean(parsedData.filename?.includes("benchmark") || parsedData.filename?.includes("sample")),
+            timestamp: new Date().toISOString(),
+          })
+        );
+      } catch {
+        // ignore storage error
+      }
     } catch (err: any) {
       setErrorMsg(err?.message || "분석 계산에 실패했습니다.");
     } finally {
@@ -353,7 +391,34 @@ export function UtmView() {
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => {
+                const csvContent = [
+                  "No,Time,Load,Displacement,Strain,Stress",
+                  "int,sec,N,mm,%,MPa",
+                  "1,0.0,0.0,0.000,0.00,0.0",
+                  "2,0.5,1470.0,0.025,0.05,42.0",
+                  "3,1.0,2940.0,0.050,0.10,84.0",
+                  "4,1.5,5880.0,0.100,0.20,168.0",
+                  "5,2.0,8820.0,0.150,0.30,252.0",
+                  "6,2.5,11200.0,0.200,0.40,320.0",
+                  "7,3.0,12775.0,0.250,0.50,365.0",
+                  "8,4.0,14350.0,0.400,0.80,410.0",
+                  "9,5.0,15575.0,0.650,1.30,445.0",
+                  "10,6.0,16275.0,0.950,1.90,465.0",
+                  "11,7.0,16800.0,1.300,2.60,480.0",
+                  "12,8.0,16450.0,1.600,3.20,470.0",
+                ].join("\n");
+                const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8" });
+                const sampleFile = new File([blob], "benchmark_utm_tensile_sample.csv", { type: "text/csv" });
+                handleFileChange(sampleFile);
+              }}
+              className="px-3.5 py-2.5 rounded-[12px] bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#334155] font-semibold text-[13px] transition-colors cursor-pointer"
+            >
+              대표 벤치마크 인장 샘플 로드
+            </button>
             <label className="flex items-center gap-2 px-4 py-2.5 rounded-[12px] bg-[#3182F6] text-white font-semibold text-[14px] cursor-pointer hover:bg-[#2563EB] transition-colors shadow-sm">
               <Upload className="w-4 h-4" />
               <span>{isParsing ? "파일 분석 중..." : "UTM 파일 불러오기"}</span>
@@ -368,6 +433,16 @@ export function UtmView() {
                 }}
               />
             </label>
+            {onNavigateToIntegrated && (
+              <button
+                type="button"
+                onClick={onNavigateToIntegrated}
+                className="px-3.5 py-2.5 rounded-[12px] bg-[#EEF2FF] hover:bg-[#E0E7FF] text-[#4338CA] border border-[#C7D2FE] font-bold text-[13px] transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>통합 리포트에서 교차 분석</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
       </div>

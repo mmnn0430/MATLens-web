@@ -93,10 +93,26 @@ class SEMParams(BaseModel):
     removed_intersection_ids: list[str] = Field(default_factory=list)
 
 
+class ExperimentMeta(BaseModel):
+    base_matrix: str = ""               # 모재 (예: "TiO2", "NbFeSb", "Al2O3")
+    nominal_composition: str = ""       # 명목 조성 (예: "TiO2", "Nb0.95Ti0.05FeSb")
+    dopant_element: str = ""            # 도펀트 원소 (예: "Nb", "Fe", "" for undoped)
+    dopant_amount: float | None = None  # 도펀트 함량 수치 (예: 0.0, 2.0, 5.0)
+    dopant_unit: str = ""               # 함량 단위 ("at%", "wt%", "mol%", "stoich_x", "")
+    process_temp_c: float | None = None # 열처리/소결 온도 (°C)
+    process_time_h: float | None = None # 유지 시간 (h)
+    atmosphere: str = ""                # 분위기 (예: "Air", "Ar", "Vacuum")
+    process_method: str = ""            # 공정 방법 (예: "Calcination", "SPS", "Annealing")
+    replicate_id: str = ""              # 반복 시편 식별자 (예: "Rep-1", "Rep-2")
+    is_synthetic_demo: bool = False     # 예시/합성 데이터 여부 (실제 시편과 엄격 구분)
+
+
 class RunAnalysisRequest(BaseModel):
     xrd_params: XRDParams = Field(default_factory=XRDParams)
     sem_params: SEMParams = Field(default_factory=SEMParams)
     run_ai_interpretation: bool = True
+    selected_xrd_file_id: str | None = None
+    selected_sem_file_id: str | None = None
 
 
 class CreateProjectRequest(BaseModel):
@@ -105,6 +121,7 @@ class CreateProjectRequest(BaseModel):
     expected_elements: list[str] = Field(default_factory=list)
     expected_formula: str = Field(default="", max_length=80)
     is_same_sample: bool = False
+    experiment_meta: ExperimentMeta | None = None
 
 
 class UpdateProjectRequest(BaseModel):
@@ -114,6 +131,7 @@ class UpdateProjectRequest(BaseModel):
     expected_formula: str | None = None
     is_same_sample: bool | None = None
     current_conditions: dict[str, Any] | None = None
+    experiment_meta: ExperimentMeta | None = None
     change_summary: str | None = None
 
 

@@ -730,30 +730,14 @@ def generate_gemini_interpretation(
             temperature=0.15,
         )
 
-        # Build automatic multi-version candidate list:
-        # 1) User's preferred model (unless "auto")
-        # 2) Curated multi-version fallback chain (2.5-flash, 2.0-flash, 2.5-flash-lite, flash-latest, 2.5-pro, 1.5-flash, 1.5-pro...)
-        # 3) Any additional dynamically discovered Gemini models on the user's account
+        # Build automatic multi-version candidate list (capped to top 3 fast models to prevent long retry stalls)
         candidate_models: list[str] = []
         if preferred_model and preferred_model.lower() != "auto":
             candidate_models.append(preferred_model)
         for fb in GEMINI_FALLBACK_ORDER:
             if fb not in candidate_models:
                 candidate_models.append(fb)
-        try:
-            for m in client.models.list():
-                short_id = (getattr(m, "name", "") or "").replace("models/", "").strip()
-                if (
-                    short_id.startswith("gemini-")
-                    and "embedding" not in short_id
-                    and "imagen" not in short_id
-                    and "veo" not in short_id
-                    and "tts" not in short_id
-                    and short_id not in candidate_models
-                ):
-                    candidate_models.append(short_id)
-        except Exception:
-            pass
+        candidate_models = candidate_models[:3]
 
         raw_json_text = None
         used_model = candidate_models[0] if candidate_models else "gemini-2.5-flash"
@@ -897,9 +881,10 @@ def generate_grain_phase_ai_interpretation(
     fast_candidates: list[str] = []
     if preferred_model and preferred_model.lower() != "auto":
         fast_candidates.append(preferred_model)
-    for m_id in ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.1-flash-lite", *GEMINI_FALLBACK_ORDER]:
+    for m_id in ["gemini-2.5-flash", "gemini-2.0-flash", *GEMINI_FALLBACK_ORDER]:
         if m_id not in fast_candidates:
             fast_candidates.append(m_id)
+    fast_candidates = fast_candidates[:3]
 
     try:
         from google import genai

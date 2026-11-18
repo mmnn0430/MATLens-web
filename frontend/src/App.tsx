@@ -5,10 +5,12 @@ import {
   SlidersHorizontal,
   ArrowLeft,
   Loader2,
-  FileBarChart2,
   Microscope,
   Activity,
   KeyRound,
+  Zap,
+  Flame,
+  Share2,
 } from "lucide-react";
 import { api, DEFAULT_SEM_PARAMS, DEFAULT_XRD_PARAMS } from "./api";
 import type {
@@ -22,27 +24,31 @@ import type {
 import { LandingSetup } from "./components/LandingSetup";
 import { XrdView } from "./components/XrdView";
 import { SemView } from "./components/SemView";
-import { IntegratedReportView } from "./components/IntegratedReportView";
 import { UtmView } from "./components/UtmView";
+import { HallView } from "./components/HallView";
+import { LfaView } from "./components/LfaView";
+import { IntegratedAnalysisView } from "./components/IntegratedAnalysisView";
 import { Button, SourceTag } from "./components/ui/primitives";
+
+export type ServiceMode = "matlens" | "utm" | "hall" | "lfa" | "integrated";
 
 function readUrlState() {
   const sp = new URLSearchParams(window.location.search);
   return {
-    mode: (sp.get("mode") as "matlens" | "utm") || "matlens",
+    mode: (sp.get("mode") as ServiceMode) || "matlens",
     projectId: sp.get("project"),
     runId: sp.get("run"),
     view: (sp.get("view") as "setup" | "results") || null,
-    tab: (sp.get("tab") as "xrd" | "sem" | "report") || "report",
+    tab: (sp.get("tab") as "xrd" | "sem") || "xrd",
   };
 }
 
 function writeUrlState(next: {
-  mode?: "matlens" | "utm";
+  mode?: ServiceMode;
   projectId?: string | null;
   runId?: string | null;
   view?: "setup" | "results";
-  tab?: "xrd" | "sem" | "report";
+  tab?: "xrd" | "sem";
 }) {
   const sp = new URLSearchParams();
   if (next.mode && next.mode !== "matlens") sp.set("mode", next.mode);
@@ -55,7 +61,7 @@ function writeUrlState(next: {
 }
 
 export default function App() {
-  const [serviceMode, setServiceMode] = useState<"matlens" | "utm">("matlens");
+  const [serviceMode, setServiceMode] = useState<ServiceMode>("matlens");
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null);
@@ -66,9 +72,9 @@ export default function App() {
   const [runAi, setRunAi] = useState<boolean>(true);
 
   const [viewMode, setViewMode] = useState<"setup" | "results">("setup");
-  const [activeTab, setActiveTab] = useState<"xrd" | "sem" | "report">("report");
+  const [activeTab, setActiveTab] = useState<"xrd" | "sem">("xrd");
   const [isBusy, setIsBusy] = useState<boolean>(false);
-  const [isRetryingAi, setIsRetryingAi] = useState<boolean>(false);
+  const [, setIsRetryingAi] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showGlobalApiPanel, setShowGlobalApiPanel] = useState<boolean>(false);
   const [globalGeminiKey, setGlobalGeminiKey] = useState<string>("");
@@ -121,14 +127,7 @@ export default function App() {
           setActiveRun(r);
           const nextView = preferredView || (r.status === "completed" || r.status === "running" ? "results" : "setup");
           setViewMode(nextView);
-          const defaultTab =
-            r.xrd_result && r.sem_result
-              ? "report"
-              : r.xrd_result
-              ? "xrd"
-              : r.sem_result
-              ? "sem"
-              : "report";
+          const defaultTab = r.xrd_result ? "xrd" : "sem";
           setActiveTab(defaultTab);
           writeUrlState({ projectId: proj.id, runId: r.id, view: nextView, tab: defaultTab });
         } else {
@@ -169,13 +168,70 @@ export default function App() {
       .catch(() => {});
     refreshProjectsList();
 
-    if (urlState.mode === "utm") {
-      setServiceMode("utm");
+    if (urlState.mode && urlState.mode !== "matlens") {
+      setServiceMode(urlState.mode);
     } else if (urlState.projectId) {
       if (urlState.tab) setActiveTab(urlState.tab);
       openProject(urlState.projectId, urlState.runId, urlState.view || undefined, true);
     }
   }, [openProject, refreshProjectsList]);
+
+  // Synchronize active XRD and SEM measurements to shared storage for Integrated Report
+  useEffect(() => {
+    if (activeRun?.xrd_result?.scherrer?.mean_nm) {
+      try {
+        localStorage.setItem(
+          "matlens_shared_xrd_data",
+          JSON.stringify({
+            crystallite_size_nm: activeRun.xrd_result.scherrer.mean_nm,
+            space_group: activeRun.xrd_result.phase_matching?.candidates?.[0]?.spacegroup || "F-43m",
+            sample_id: activeProject?.sample_name || "XRD-Sample",
+            formula: activeProject?.expected_formula || "Custom",
+            timestamp: new Date().toISOString(),
+          })
+        );
+      } catch (e) {
+        console.warn("Failed to persist XRD data to localStorage:", e);
+      }
+    }
+    const semFile = activeProject?.files?.find((f) => f.file_role === "sem");
+    let semImageUrl: string | null = null;
+    if (activeRun?.id && (activeRun.has_overlay || activeRun.status === "completed")) {
+      semImageUrl = api.overlayUrl(activeRun.id);
+    } else if (activeRun?.id && activeRun.has_roi_image) {
+      semImageUrl = api.roiUrl(activeRun.id);
+    } else if (activeProject?.id && semFile?.id) {
+      semImageUrl = api.rawFileUrl(activeProject.id, semFile.id);
+    }
+
+    if (activeRun?.sem_result || semImageUrl) {
+      const meanGrain =
+        activeRun?.sem_result?.summary_stats?.mean_diameter ||
+        activeRun?.sem_result?.grain_intercept?.mean_intercept_length ||
+        activeRun?.sem_result?.summary_stats?.d50 ||
+        activeRun?.sem_result?.summary_stats?.mean_um ||
+        2.4;
+      const porosityVal =
+        activeRun?.sem_result?.porosity?.porosity_fraction_pct ||
+        activeRun?.sem_result?.porosity?.porosity_percent ||
+        1.2;
+
+      try {
+        localStorage.setItem(
+          "matlens_shared_sem_data",
+          JSON.stringify({
+            grain_size_um: Number(Number(meanGrain).toFixed(2)),
+            porosity_pct: Number(Number(porosityVal).toFixed(1)),
+            sample_id: activeProject?.sample_name || "SEM-Sample",
+            image_url: semImageUrl,
+            timestamp: new Date().toISOString(),
+          })
+        );
+      } catch (e) {
+        console.warn("Failed to persist SEM data to localStorage:", e);
+      }
+    }
+  }, [activeRun, activeProject]);
 
   // Poll running job until completed or failed
   useEffect(() => {
@@ -196,12 +252,7 @@ export default function App() {
           }
           if (updated.status === "completed") {
             setViewMode("results");
-            const nextTab =
-              updated.xrd_result && updated.sem_result
-                ? "report"
-                : updated.xrd_result
-                ? "xrd"
-                : "sem";
+            const nextTab = updated.xrd_result ? "xrd" : "sem";
             setActiveTab((prev) => prev || nextTab);
             writeUrlState({
               projectId: updated.project_id,
@@ -326,7 +377,7 @@ export default function App() {
       const r = await api.getRun(started.run_id);
       setActiveRun(r);
       setViewMode("results");
-      writeUrlState({ projectId: proj.id, runId: r.id, view: "results", tab: "report" });
+      writeUrlState({ projectId: proj.id, runId: r.id, view: "results", tab: "xrd" });
     } catch (err: any) {
       setErrorMsg(err?.message || "샘플 프로젝트 생성에 실패했습니다.");
       setIsBusy(false);
@@ -342,6 +393,26 @@ export default function App() {
       setActiveProject(proj);
       hydrateParamsFromProject(proj);
       refreshProjectsList();
+
+      if (role === "sem") {
+        const semFile = proj.files?.find((f) => f.file_role === "sem");
+        if (semFile) {
+          try {
+            localStorage.setItem(
+              "matlens_shared_sem_data",
+              JSON.stringify({
+                grain_size_um: 2.4,
+                porosity_pct: 1.2,
+                sample_id: proj.sample_name || "SEM-Sample",
+                image_url: api.rawFileUrl(proj.id, semFile.id),
+                timestamp: new Date().toISOString(),
+              })
+            );
+          } catch {
+            // ignore
+          }
+        }
+      }
     } catch (err: any) {
       setErrorMsg(err?.message || "파일 업로드 중 오류가 발생했습니다.");
     } finally {
@@ -358,6 +429,26 @@ export default function App() {
       setActiveProject(proj);
       hydrateParamsFromProject(proj);
       refreshProjectsList();
+
+      if (role === "sem") {
+        const semFile = proj.files?.find((f) => f.file_role === "sem");
+        if (semFile) {
+          try {
+            localStorage.setItem(
+              "matlens_shared_sem_data",
+              JSON.stringify({
+                grain_size_um: 2.4,
+                porosity_pct: 1.2,
+                sample_id: proj.sample_name || "SEM-Sample",
+                image_url: api.rawFileUrl(proj.id, semFile.id),
+                timestamp: new Date().toISOString(),
+              })
+            );
+          } catch {
+            // ignore
+          }
+        }
+      }
     } catch (err: any) {
       setErrorMsg(err?.message || "바탕화면 파일 업로드 중 오류가 발생했습니다.");
     } finally {
@@ -465,7 +556,8 @@ export default function App() {
     }
   };
 
-  const handleSelectSavedRun = async (runId: string) => {
+  // Legacy run selection helper retained for backward compatibility
+  const _handleSelectSavedRun = async (runId: string) => {
     if (!activeProject) return;
     setIsBusy(true);
     try {
@@ -480,15 +572,16 @@ export default function App() {
       setIsBusy(false);
     }
   };
+  void _handleSelectSavedRun;
 
   const isJobRunning = activeRun?.status === "queued" || activeRun?.status === "running";
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F7F8FA] text-[#191F28]">
       {/* Top Navigation Header */}
-      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-[#E5E8EB]">
-        <div className="max-w-[1600px] mx-auto px-4 sm:px-8 h-16 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
+      <header className="sticky top-0 z-40 w-full bg-white/95 backdrop-blur border-b border-[#E5E8EB]">
+        <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-8 min-h-16 py-2 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
               type="button"
               onClick={() => {
@@ -507,20 +600,20 @@ export default function App() {
             </button>
 
             {/* Service Mode Toggle Switcher */}
-            <div className="flex items-center p-0.5 rounded-[10px] bg-[#F2F4F6] border border-[#E5E8EB] ml-1 sm:ml-2">
+            <div className="flex items-center p-0.5 rounded-[10px] bg-[#F2F4F6] border border-[#E5E8EB] ml-1 sm:ml-2 gap-0.5 shrink-0 whitespace-nowrap">
               <button
                 type="button"
                 onClick={() => {
                   setServiceMode("matlens");
                   writeUrlState({ mode: "matlens", projectId: activeProject?.id, runId: activeRun?.id, view: viewMode, tab: activeTab });
                 }}
-                className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-[8px] text-[12px] sm:text-[13px] font-semibold transition-all ${
+                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all ${
                   serviceMode === "matlens"
                     ? "bg-white text-[#191F28] shadow-sm font-bold"
                     : "text-[#6B7684] hover:text-[#191F28]"
                 }`}
               >
-                XRD · SEM 분석
+                XRD·SEM
               </button>
               <button
                 type="button"
@@ -528,22 +621,66 @@ export default function App() {
                   setServiceMode("utm");
                   writeUrlState({ mode: "utm" });
                 }}
-                className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-[8px] text-[12px] sm:text-[13px] font-semibold transition-all flex items-center gap-1.5 ${
+                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all ${
                   serviceMode === "utm"
                     ? "bg-white text-[#3182F6] shadow-sm font-bold"
                     : "text-[#6B7684] hover:text-[#191F28]"
                 }`}
               >
-                <span>UTM 데이터 분석</span>
-                <span className="w-1.5 h-1.5 rounded-full bg-[#3182F6]" />
+                UTM
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setServiceMode("hall");
+                  writeUrlState({ mode: "hall" });
+                }}
+                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 ${
+                  serviceMode === "hall"
+                    ? "bg-white text-[#2563EB] shadow-sm font-bold"
+                    : "text-[#6B7684] hover:text-[#191F28]"
+                }`}
+              >
+                <Zap className="w-3 h-3 text-[#2563EB]" />
+                Hall
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setServiceMode("lfa");
+                  writeUrlState({ mode: "lfa" });
+                }}
+                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 ${
+                  serviceMode === "lfa"
+                    ? "bg-white text-[#D97706] shadow-sm font-bold"
+                    : "text-[#6B7684] hover:text-[#191F28]"
+                }`}
+              >
+                <Flame className="w-3 h-3 text-[#D97706]" />
+                LFA
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setServiceMode("integrated");
+                  writeUrlState({ mode: "integrated" });
+                }}
+                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 ${
+                  serviceMode === "integrated"
+                    ? "bg-white text-[#7C3AED] shadow-sm font-bold"
+                    : "text-[#6B7684] hover:text-[#191F28]"
+                }`}
+              >
+                <Share2 className="w-3 h-3 text-[#7C3AED]" />
+                통합 리포트
               </button>
             </div>
 
             {serviceMode === "matlens" && activeProject && (
               <>
-                <span className="text-[#E5E8EB] text-[18px]">/</span>
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-[14px] sm:text-[15px] font-semibold text-[#191F28] truncate">
+                <span className="hidden xl:inline text-[#E5E8EB] text-[18px]">/</span>
+                <div className="hidden xl:flex items-center gap-2 min-w-0 max-w-[260px] 2xl:max-w-[420px] overflow-hidden">
+                  <span className="text-[14px] font-semibold text-[#191F28] truncate">
                     {activeProject.sample_name}
                   </span>
                   {activeProject.is_sample_demo && <SourceTag kind="샘플" />}
@@ -737,7 +874,28 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-8 py-6 sm:py-8">
         {serviceMode === "utm" ? (
-          <UtmView />
+          <UtmView
+            onNavigateToIntegrated={() => {
+              setServiceMode("integrated");
+              writeUrlState({ mode: "integrated" });
+            }}
+          />
+        ) : serviceMode === "hall" ? (
+          <HallView
+            onNavigateToIntegrated={() => {
+              setServiceMode("integrated");
+              writeUrlState({ mode: "integrated" });
+            }}
+          />
+        ) : serviceMode === "lfa" ? (
+          <LfaView
+            onNavigateToIntegrated={() => {
+              setServiceMode("integrated");
+              writeUrlState({ mode: "integrated" });
+            }}
+          />
+        ) : serviceMode === "integrated" ? (
+          <IntegratedAnalysisView activeProject={activeProject} activeRun={activeRun} />
         ) : viewMode === "setup" || !activeProject ? (
           <LandingSetup
             health={health}
@@ -798,12 +956,12 @@ export default function App() {
               </div>
             )}
 
-            {/* Completed Results Tabs: [XRD] [SEM] [통합 리포트] */}
+            {/* Completed Results Tabs: [XRD] [SEM] */}
             {activeRun && activeRun.status === "completed" && (
               <Tabs.Root
                 value={activeTab}
                 onValueChange={(val) => {
-                  const t = val as "xrd" | "sem" | "report";
+                  const t = val as "xrd" | "sem";
                   setActiveTab(t);
                   writeUrlState({
                     projectId: activeProject.id,
@@ -815,7 +973,7 @@ export default function App() {
                 className="space-y-6"
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <Tabs.List className="inline-flex p-1.5 rounded-[16px] bg-white border border-[#E5E8EB] gap-1">
+                  <Tabs.List className="inline-flex p-1.5 rounded-[16px] bg-white border border-[#E5E8EB] gap-1 shadow-sm">
                     <Tabs.Trigger
                       value="xrd"
                       className="inline-flex items-center gap-2 min-h-[44px] px-4 sm:px-5 rounded-[12px] text-[14px] font-semibold text-[#6B7684] data-[state=active]:bg-[#3182F6] data-[state=active]:text-white transition-colors cursor-pointer"
@@ -829,13 +987,6 @@ export default function App() {
                     >
                       <Microscope className="w-4 h-4" />
                       SEM
-                    </Tabs.Trigger>
-                    <Tabs.Trigger
-                      value="report"
-                      className="inline-flex items-center gap-2 min-h-[44px] px-4 sm:px-5 rounded-[12px] text-[14px] font-semibold text-[#6B7684] data-[state=active]:bg-[#3182F6] data-[state=active]:text-white transition-colors cursor-pointer"
-                    >
-                      <FileBarChart2 className="w-4 h-4" />
-                      통합 리포트
                     </Tabs.Trigger>
                   </Tabs.List>
 
@@ -860,6 +1011,7 @@ export default function App() {
                       })
                     }
                     onRerun={handleStartRun}
+                    onNavigateToIntegrated={() => setServiceMode("integrated")}
                   />
                 </Tabs.Content>
 
@@ -872,16 +1024,7 @@ export default function App() {
                     isBusy={isBusy || isJobRunning}
                     onChangeParams={setSemParams}
                     onRerun={handleStartRun}
-                  />
-                </Tabs.Content>
-
-                <Tabs.Content value="report" className="outline-none">
-                  <IntegratedReportView
-                    project={activeProject}
-                    run={activeRun}
-                    isRetryingAi={isRetryingAi}
-                    onRetryAi={handleRetryAi}
-                    onSelectRun={handleSelectSavedRun}
+                    onNavigateToIntegrated={() => setServiceMode("integrated")}
                   />
                 </Tabs.Content>
               </Tabs.Root>

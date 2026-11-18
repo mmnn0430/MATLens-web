@@ -265,4 +265,162 @@ export const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   }),
+
+  // MatLens 2.0 API v1
+  uploadAndDetectFile: async (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch("/api/v1/files/upload", {
+      method: "POST",
+      body: fd,
+    });
+    return handleJson<any>(r);
+  },
+
+  runHallAnalysis: async (payload: any) => {
+    const r = await fetch("/api/v1/analysis/hall", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  runLfaAnalysis: async (payload: any) => {
+    const r = await fetch("/api/v1/analysis/lfa", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  runIntegratedAnalysis: async (payload: any) => {
+    const r = await fetch("/api/v1/analysis/integrated", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  searchLiterature: async (payload: any) => {
+    const r = await fetch("/api/v1/literature/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  verifyDoi: async (doi: string) => {
+    const r = await fetch("/api/v1/literature/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doi }),
+    });
+    return handleJson<any>(r);
+  },
+
+  getApiV1Health: async () => {
+    const r = await fetch("/api/v1/health");
+    return handleJson<any>(r);
+  },
+
+  chatAssistant: async (payload: {
+    message: string;
+    history?: { role: string; content: string }[];
+    material_name?: string;
+    chemical_composition?: string;
+    instrument?: string;
+    calculated_properties?: any;
+    references?: any[];
+  }) => {
+    const r = await fetch("/api/v1/assistant/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  downloadScientificPdfReport: async (payload: any, filename?: string) => {
+    const r = await fetch("/api/v1/reports/pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const err = await r.text();
+      throw new Error(`PDF 생성 실패: ${err || r.statusText}`);
+    }
+    const blob = await r.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename || `MatLens2_Scientific_Report_${payload.sample_id || "Sample"}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
+
+  // Multi-Specimen Experimental Question Comparison & Cross-Instrument API
+  seedComparisonSeries: async (forceReseed = false) => {
+    const r = await fetch("/api/v1/comparison/seed-series", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force_reseed: forceReseed }),
+    });
+    return handleJson<any>(r);
+  },
+
+  evaluateComparisonCandidates: async (payload: {
+    question_type: string;
+    baseline_project_id?: string | null;
+    auto_seed_if_empty?: boolean;
+  }) => {
+    const r = await fetch("/api/v1/comparison/candidates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  analyzeComparison: async (payload: {
+    session_id?: string | null;
+    question_type: string;
+    baseline_project_id?: string | null;
+    slots: Array<{
+      project_id: string;
+      xrd_run_id?: string | null;
+      sem_file_id?: string | null;
+      sem_run_id?: string | null;
+    }>;
+    norm_mode?: "max_100" | "raw";
+    offset_step?: number;
+    report_title?: string | null;
+  }) => {
+    const r = await fetch("/api/v1/comparison/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<any>(r);
+  },
+
+  getComparisonSession: async (sessionId: string) => {
+    const r = await fetch(`/api/v1/comparison/sessions/${encodeURIComponent(sessionId)}`);
+    return handleJson<any>(r);
+  },
+
+  comparisonXrdPngUrl: (sessionId: string) =>
+    `/api/v1/comparison/sessions/${encodeURIComponent(sessionId)}/export/xrd-chart.png`,
+  comparisonPeaksCsvUrl: (sessionId: string) =>
+    `/api/v1/comparison/sessions/${encodeURIComponent(sessionId)}/export/xrd-peaks.csv`,
+  comparisonJsonUrl: (sessionId: string) =>
+    `/api/v1/comparison/sessions/${encodeURIComponent(sessionId)}/export/result.json`,
+  comparisonPdfUrl: (sessionId: string) =>
+    `/api/v1/comparison/sessions/${encodeURIComponent(sessionId)}/export/report.pdf`,
 };

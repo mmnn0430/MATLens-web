@@ -5,10 +5,12 @@ interface PlotlyChartProps {
   data: any[];
   layout: Record<string, any>;
   height?: number;
+  config?: Record<string, any>;
+  style?: React.CSSProperties;
   onPointClick?: (point: any) => void;
 }
 
-export function PlotlyChart({ data, layout, height = 420, onPointClick }: PlotlyChartProps) {
+export function PlotlyChart({ data, layout, height = 420, config: userConfig, style, onPointClick }: PlotlyChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -34,6 +36,7 @@ export function PlotlyChart({ data, layout, height = 420, onPointClick }: Plotly
       responsive: true,
       displaylogo: false,
       modeBarButtonsToRemove: ["lasso2d", "select2d"],
+      ...userConfig,
     };
 
     Plotly.react(el, data, mergedLayout, config);
@@ -71,5 +74,5 @@ export function PlotlyChart({ data, layout, height = 420, onPointClick }: Plotly
     };
   }, []);
 
-  return <div ref={containerRef} className="w-full overflow-hidden rounded-[14px]" />;
+  return <div ref={containerRef} style={style} className="w-full overflow-hidden rounded-[14px]" />;
 }

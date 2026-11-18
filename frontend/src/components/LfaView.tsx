@@ -1,0 +1,529 @@
+import { useState } from "react";
+import {
+  Activity,
+  AlertCircle,
+  AlertTriangle,
+  BookOpen,
+  CheckCircle2,
+  Flame,
+  Info,
+  Share2,
+  Sparkles,
+  Upload,
+} from "lucide-react";
+import { api } from "../api";
+import { PlotlyChart } from "./PlotlyChart";
+import type { GroundingData, LfaAnalysisResult, ScientificInterpretation } from "../types";
+
+interface LfaViewProps {
+  onNavigateToIntegrated?: () => void;
+}
+
+export function LfaView({ onNavigateToIntegrated }: LfaViewProps = {}) {
+  const [rawText, setRawText] = useState<string>("");
+  const [thicknessMm, setThicknessMm] = useState<number>(2.5);
+  const [densityGCm3, setDensityGCm3] = useState<number | "">(2.6);
+  const [specificHeatJGK, setSpecificHeatJGK] = useState<number | "">(0.82);
+  const [isLitDensity, setIsLitDensity] = useState<boolean>(false);
+  const [isLitCp, setIsLitCp] = useState<boolean>(false);
+  const [sampleId, setSampleId] = useState<string>("Pyroceram-Standard");
+  const [materialName, setMaterialName] = useState<string>("Pyroceram 9606");
+  const [tempC, setTempC] = useState<number>(25);
+
+  const [loading, setLoading] = useState<boolean>(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const [result, setResult] = useState<LfaAnalysisResult | null>(null);
+  const [grounding, setGrounding] = useState<GroundingData | null>(null);
+  const [aiReport, setAiReport] = useState<ScientificInterpretation | null>(null);
+
+  const loadBenchmarkSample = () => {
+    // Benchmark Pyroceram 9606 standard (2.50 mm thickness, 2.60 g/cm^3, Cp = 0.82 J/g*K)
+    const header = `# MatLens Benchmark Pyroceram 9606 Standard\n# Thickness: 2.50 mm | Density: 2.60 g/cm^3 | Cp: 0.82 J/(g*K)\nTime_s,RearTemperature_C\n`;
+    const rows = [
+      "-0.100,24.50", "-0.050,24.50", "0.000,24.51", "0.050,24.52", "0.100,24.55",
+      "0.150,24.65", "0.200,24.80", "0.250,25.02", "0.300,25.30", "0.350,25.62",
+      "0.400,25.95", "0.450,26.25", "0.500,26.54", "0.600,27.05", "0.700,27.42",
+      "0.800,27.68", "0.900,27.85", "1.000,27.95", "1.200,28.00", "1.500,27.92"
+    ];
+    setRawText(header + rows.join("\n"));
+    setThicknessMm(2.5);
+    setDensityGCm3(2.6);
+    setSpecificHeatJGK(0.82);
+    setIsLitDensity(false);
+    setIsLitCp(false);
+    setSampleId("Pyroceram-Standard");
+    setMaterialName("Pyroceram 9606 Standard");
+    setTempC(25);
+    setErrorMsg(null);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const content = evt.target?.result as string;
+      setRawText(content);
+      setErrorMsg(null);
+    };
+    reader.readAsText(file);
+  };
+
+  const executeAnalysis = async () => {
+    if (!rawText.trim()) {
+      setErrorMsg("LFA 측정 데이터(CSV/TXT)를 입력하거나 벤치마크 샘플을 로드하세요.");
+      return;
+    }
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const resp = await api.runLfaAnalysis({
+        raw_text: rawText,
+        thickness_mm: thicknessMm,
+        density_g_cm3: densityGCm3 === "" ? null : Number(densityGCm3),
+        specific_heat_J_gK: specificHeatJGK === "" ? null : Number(specificHeatJGK),
+        is_literature_density: isLitDensity,
+        is_literature_cp: isLitCp,
+        sample_id: sampleId,
+        material_name: materialName,
+        measurement_temperature_C: tempC,
+        include_ai_interpretation: true,
+      });
+      setResult(resp.calculated_properties);
+      setGrounding(resp.grounding);
+      setAiReport(resp.ai_interpretation);
+
+      // Save to shared measurement storage for continuous cross-instrument integration
+      try {
+        localStorage.setItem(
+          "matlens_shared_lfa_data",
+          JSON.stringify({
+            sample_id: sampleId,
+            material_name: materialName,
+            temperature_C: tempC,
+            thermal_diffusivity_mm2_s: resp.calculated_properties.thermal_diffusivity_mm2_s,
+            thermal_conductivity_W_mK: resp.calculated_properties.thermal_conductivity_W_mK,
+            density_g_cm3: densityGCm3 === "" ? null : Number(densityGCm3),
+            specific_heat_J_gK: specificHeatJGK === "" ? null : Number(specificHeatJGK),
+            is_literature_density: isLitDensity,
+            is_literature_cp: isLitCp,
+            timestamp: new Date().toISOString(),
+          })
+        );
+      } catch (e) {
+        console.warn("Failed to persist LFA data to localStorage:", e);
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || "LFA 분석 실행에 실패했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Build Plotly figure data
+  const plotData: any[] = [];
+  if (result) {
+    // 1. Raw transient curve
+    plotData.push({
+      x: result.time_series_s,
+      y: result.temp_series_C,
+      mode: "markers+lines",
+      name: "후면 온도 응답 (Rear Temp)",
+      marker: { color: "#3182F6", size: 6 },
+      line: { color: "#93C5FD", width: 1.5 },
+    });
+
+    // 2. Parker Theoretical Curve
+    if (result.fitted_time_s.length > 0) {
+      plotData.push({
+        x: result.fitted_time_s,
+        y: result.fitted_temp_C,
+        mode: "lines",
+        name: "Parker 1D 이론 곡선",
+        line: { color: "#EF4444", width: 2, dash: "dot" },
+      });
+    }
+
+    // 3. Half-rise time point
+    const tHalf = result.half_rise_time_s;
+    const yHalf = result.baseline_temp_C + 0.5 * result.max_temp_rise_C;
+    plotData.push({
+      x: [tHalf],
+      y: [yHalf],
+      mode: "markers+text",
+      name: `t₁/₂ = ${tHalf.toFixed(4)} s`,
+      text: [`t₁/₂ (${tHalf.toFixed(3)}s)`],
+      textposition: "bottom right",
+      marker: { color: "#10B981", size: 10, symbol: "diamond" },
+    });
+  }
+
+  const plotLayout = {
+    title: {
+      text: `${sampleId} — LFA Transient Thermogram & Parker Half-Rise Fit`,
+      font: { size: 15, family: "Pretendard, sans-serif" },
+    },
+    xaxis: {
+      title: "Time t (s)",
+      showgrid: true,
+      zeroline: true,
+      zerolinecolor: "#CBD5E1",
+      gridcolor: "#F1F5F9",
+    },
+    yaxis: {
+      title: "Rear Surface Temperature T (°C)",
+      showgrid: true,
+      zeroline: true,
+      zerolinecolor: "#CBD5E1",
+      gridcolor: "#F1F5F9",
+    },
+    legend: { orientation: "h", y: -0.25 },
+    margin: { t: 50, r: 30, b: 60, l: 60 },
+    paper_bgcolor: "#FFFFFF",
+    plot_bgcolor: "#FAFAFA",
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Top Banner & Title */}
+      <div className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#FEF3C7] text-[#D97706] text-[12px] font-bold mb-2">
+            <Flame className="w-3.5 h-3.5" />
+            MatLens 2.0 Module
+          </div>
+          <h2 className="text-[22px] font-bold text-[#191F28]">LFA (Laser Flash Analysis) 열물성 정량 분석</h2>
+          <p className="text-[14px] text-[#6B7684] mt-1">
+            과도 온도 응답 곡선(Thermogram)에서 Parker 반상승 시간(t₁/₂)을 구하여 열확산도(α) 및 열전도도(κ = α·ρ·Cp)를 계산하고 학술 근거와 대조합니다.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={loadBenchmarkSample}
+            className="px-4 py-2 rounded-[12px] bg-[#F2F4F6] hover:bg-[#E5E8EB] text-[#333D4B] text-[13px] font-semibold transition flex items-center gap-1.5 cursor-pointer"
+          >
+            <Activity className="w-4 h-4 text-[#D97706]" />
+            벤치마크 Pyroceram 샘플 로드
+          </button>
+        </div>
+      </div>
+
+      {errorMsg && (
+        <div className="rounded-[16px] bg-[#FEE2E2] border border-[#FECACA] p-4 text-[13px] text-[#DC2626] flex justify-between items-center">
+          <span>{errorMsg}</span>
+          <button type="button" onClick={() => setErrorMsg(null)} className="font-semibold underline cursor-pointer">
+            닫기
+          </button>
+        </div>
+      )}
+
+      {/* Input Configuration & File Area */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="lg:col-span-5 bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-4">
+          <h3 className="text-[16px] font-bold text-[#191F28] flex items-center gap-2">
+            <Upload className="w-4 h-4 text-[#D97706]" />
+            측정 조건 및 물성치 입력
+          </h3>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">시료 ID (Sample ID)</label>
+              <input
+                type="text"
+                value={sampleId}
+                onChange={(e) => setSampleId(e.target.value)}
+                className="w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] text-[13px]"
+              />
+            </div>
+            <div>
+              <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">재료명 (Material Name)</label>
+              <input
+                type="text"
+                value={materialName}
+                onChange={(e) => setMaterialName(e.target.value)}
+                className="w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] text-[13px]"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">시편 두께 L (mm) *필수</label>
+              <input
+                type="number"
+                step="0.01"
+                value={thicknessMm}
+                onChange={(e) => setThicknessMm(Number(e.target.value))}
+                className="w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] text-[13px] font-bold text-[#191F28]"
+              />
+            </div>
+            <div>
+              <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">측정 온도 (°C)</label>
+              <input
+                type="number"
+                value={tempC}
+                onChange={(e) => setTempC(Number(e.target.value))}
+                className="w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] text-[13px]"
+              />
+            </div>
+          </div>
+
+          <div className="p-3 bg-[#FFFBEB] rounded-[12px] border border-[#FDE68A] space-y-2">
+            <span className="text-[12px] font-bold text-[#92400E] block flex items-center gap-1.5">
+              <AlertCircle className="w-4 h-4 text-[#D97706]" />
+              열전도도(κ) 계산을 위한 보조 입력 (미입력 시 열확산도만 산출)
+            </span>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-[#78350F] mb-1">밀도 ρ (g/cm³)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={densityGCm3}
+                  onChange={(e) => setDensityGCm3(e.target.value === "" ? "" : Number(e.target.value))}
+                  placeholder="미입력 시 보류"
+                  className="w-full px-2.5 py-1.5 rounded-[8px] border border-[#FCD34D] bg-white text-[12px]"
+                />
+                <label className="flex items-center gap-1.5 mt-1 cursor-pointer text-[11px] text-[#92400E]">
+                  <input
+                    type="checkbox"
+                    checked={isLitDensity}
+                    onChange={(e) => setIsLitDensity(e.target.checked)}
+                    className="rounded text-[#D97706]"
+                  />
+                  <span>문헌 추정값 (기공률 주의)</span>
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-[#78350F] mb-1">비열 Cp (J/g·K)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={specificHeatJGK}
+                  onChange={(e) => setSpecificHeatJGK(e.target.value === "" ? "" : Number(e.target.value))}
+                  placeholder="미입력 시 보류"
+                  className="w-full px-2.5 py-1.5 rounded-[8px] border border-[#FCD34D] bg-white text-[12px]"
+                />
+                <label className="flex items-center gap-1.5 mt-1 cursor-pointer text-[11px] text-[#92400E]">
+                  <input
+                    type="checkbox"
+                    checked={isLitCp}
+                    onChange={(e) => setIsLitCp(e.target.checked)}
+                    className="rounded text-[#D97706]"
+                  />
+                  <span>문헌 추정값 승인</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-[12px] font-semibold text-[#4E5968]">원시 과도 온도(Time vs Rear Temp) 데이터</label>
+              <label className="text-[12px] text-[#D97706] font-semibold cursor-pointer hover:underline">
+                파일 찾기 (CSV/TXT)
+                <input type="file" accept=".csv,.txt,.dat" onChange={handleFileUpload} className="hidden" />
+              </label>
+            </div>
+            <textarea
+              rows={7}
+              value={rawText}
+              onChange={(e) => setRawText(e.target.value)}
+              placeholder="Time_s,RearTemperature_C&#10;-0.1, 24.5&#10;0.45, 26.25..."
+              className="w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] font-mono text-[12px] bg-[#F8FAFC]"
+            />
+          </div>
+
+          <button
+            type="button"
+            disabled={loading}
+            onClick={executeAnalysis}
+            className="w-full py-3 rounded-[12px] bg-[#D97706] hover:bg-[#B45309] text-white text-[14px] font-bold transition flex justify-center items-center gap-2 cursor-pointer shadow"
+          >
+            {loading ? "Parker 모델 피팅 및 근거 검증 중..." : "LFA 열물성 분석 및 AI 검증 실행"}
+          </button>
+        </div>
+
+        {/* Graph and Summary Results */}
+        <div className="lg:col-span-7 bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm flex flex-col justify-between">
+          <div>
+            <h3 className="text-[16px] font-bold text-[#191F28] mb-4 flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <Flame className="w-4 h-4 text-[#D97706]" />
+                LFA 과도 응답 곡선 & 반상승점(t₁/₂) 검출
+              </span>
+              {result && (
+                <span className="text-[12px] font-medium text-[#6B7684]">
+                  반상승 시간 t₁/₂ = <strong className="text-[#191F28]">{result.half_rise_time_s.toFixed(4)} s</strong>
+                </span>
+              )}
+            </h3>
+
+            {result ? (
+              <div className="rounded-[12px] border border-[#E5E8EB] overflow-hidden bg-white">
+                <PlotlyChart data={plotData} layout={plotLayout} config={{ responsive: true }} style={{ width: "100%", height: "340px" }} />
+              </div>
+            ) : (
+              <div className="h-[340px] rounded-[12px] bg-[#F8FAFC] border border-dashed border-[#CBD5E1] flex flex-col items-center justify-center text-[#94A3B8] text-[13px] gap-2">
+                <Info className="w-6 h-6 text-[#94A3B8]" />
+                왼쪽에서 LFA 과도 응답 데이터를 로드하고 분석을 실행하면 인터랙티브 온도 상승 그래프가 생성됩니다.
+              </div>
+            )}
+          </div>
+
+          {/* Quick Quantitative Table */}
+          {result && (
+            <div className="mt-4 space-y-2">
+              {result.missing_inputs.length > 0 && (
+                <div className="p-3 bg-[#FEF2F2] rounded-[10px] border border-[#FCA5A5] text-[12px] text-[#B91C1C] flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>
+                    <strong>열전도도 계산 보류:</strong> {result.missing_inputs.join(", ")} 입력이 누락되었습니다. 열확산도(α)는 정상 계산되었습니다.
+                  </span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[#F8FAFC] p-3.5 rounded-[14px] border border-[#E2E8F0]">
+                <div>
+                  <span className="text-[11px] font-semibold text-[#64748B] block">열확산도 (α)</span>
+                  <span className="text-[14px] font-bold text-[#D97706]">{result.thermal_diffusivity_mm2_s.toFixed(3)} mm²/s</span>
+                </div>
+                <div>
+                  <span className="text-[11px] font-semibold text-[#64748B] block">열전도도 (κ)</span>
+                  <span className="text-[14px] font-bold text-[#1E293B]">
+                    {result.thermal_conductivity_W_mK !== null ? `${result.thermal_conductivity_W_mK.toFixed(2)} W/m·K` : "입력 보류"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[11px] font-semibold text-[#64748B] block">반상승 시간 (t₁/₂)</span>
+                  <span className="text-[14px] font-bold text-[#1E293B]">{result.half_rise_time_s.toFixed(4)} s</span>
+                </div>
+                <div>
+                  <span className="text-[11px] font-semibold text-[#64748B] block">최대 온도 상승 (ΔT)</span>
+                  <span className="text-[14px] font-bold text-[#1E293B]">{result.max_temp_rise_C.toFixed(2)} °C</span>
+                </div>
+              </div>
+
+              {/* Continuous Integration Flow Banner */}
+              <div className="p-3.5 rounded-[12px] bg-[#FFFBEB] border border-[#FDE68A] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-[#D97706] shrink-0" />
+                  <span className="text-[12px] text-[#92400E] font-medium">
+                    LFA 열물성 데이터가 <strong>'통합 리포트'</strong>에 자동 연계되었습니다. (열확산도: {result.thermal_diffusivity_mm2_s.toFixed(3)} mm²/s)
+                  </span>
+                </div>
+                {onNavigateToIntegrated && (
+                  <button
+                    type="button"
+                    onClick={onNavigateToIntegrated}
+                    className="px-3 py-1 rounded-[8px] bg-[#D97706] hover:bg-[#B45309] text-white text-[11px] font-bold transition flex items-center gap-1 shrink-0 cursor-pointer shadow-sm"
+                  >
+                    <Share2 className="w-3 h-3" />
+                    통합 리포트에서 교차 분석 →
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Grounding & Evidence Panel */}
+      {grounding && (
+        <div className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-3">
+            <h3 className="text-[16px] font-bold text-[#191F28] flex items-center gap-2">
+              <BookOpen className="w-5 h-5 text-[#D97706]" />
+              학술 논문 기반 열물성 검증 (Thermal Transport Grounding)
+            </h3>
+            <span className="px-2.5 py-0.5 rounded-full text-[12px] font-semibold bg-[#DCFCE7] text-[#16A34A]">
+              DOI 검증 완료
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {grounding.grounded_claims.map((claim, idx) => (
+              <div key={idx} className="p-3.5 rounded-[12px] border border-[#E2E8F0] bg-[#FAFAFA] space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-[#FEF3C7] text-[#B45309]">
+                    [{claim.category}]
+                  </span>
+                  {claim.doi && (
+                    <a
+                      href={`https://doi.org/${claim.doi}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[11px] font-medium text-[#3182F6] hover:underline"
+                    >
+                      DOI: {claim.doi}
+                    </a>
+                  )}
+                </div>
+                <p className="text-[13px] text-[#1E293B] font-medium leading-relaxed">{claim.claim_text}</p>
+                {claim.limitation_note && (
+                  <span className="text-[11px] text-[#64748B] block italic">
+                    * 한계 조건: {claim.limitation_note}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Structured 12-Section Vertex AI Scientific Report */}
+      {aiReport && (
+        <div className="bg-white rounded-[20px] p-6 border border-[#E5E8EB] shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-3">
+            <h3 className="text-[16px] font-bold text-[#191F28] flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-[#8B5CF6]" />
+              Vertex AI LFA 정밀 열전달 리포트
+            </h3>
+            <span className="text-[12px] text-[#6B7684] font-medium">{aiReport.ai_engine}</span>
+          </div>
+
+          <div className="space-y-4 text-[13px] text-[#334155] leading-relaxed">
+            <div>
+              <h4 className="font-bold text-[#0F172A] mb-1">1. 분석 요약 (Analysis Summary)</h4>
+              <p className="bg-[#F8FAFC] p-3 rounded-[10px] border border-[#E2E8F0]">{aiReport.analysis_summary}</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <h4 className="font-bold text-[#0F172A] mb-1">5. 과도 응답 곡선 해석 (Thermogram Interpretation)</h4>
+                <p className="bg-[#F8FAFC] p-3 rounded-[10px] border border-[#E2E8F0]">{aiReport.graph_interpretation}</p>
+              </div>
+              <div>
+                <h4 className="font-bold text-[#0F172A] mb-1">8. 포논 열수송 메커니즘 (Phonon Scattering Discussion)</h4>
+                <p className="bg-[#F8FAFC] p-3 rounded-[10px] border border-[#E2E8F0]">{aiReport.mechanism_discussion}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <h4 className="font-bold text-[#0F172A] mb-1">9. 대체 가설 및 미세조직 영향 (Microstructure & Porosity)</h4>
+                <p className="bg-[#F8FAFC] p-3 rounded-[10px] border border-[#E2E8F0]">{aiReport.alternative_explanations}</p>
+              </div>
+              <div>
+                <h4 className="font-bold text-[#0F172A] mb-1">10. 한계 및 측정 불확도 (Limitations & Uncertainty)</h4>
+                <p className="bg-[#F8FAFC] p-3 rounded-[10px] border border-[#E2E8F0]">{aiReport.limitations_and_uncertainty}</p>
+              </div>
+            </div>
+
+            <div>
+              <h4 className="font-bold text-[#0F172A] mb-1">11. 제안하는 추가 검증 실험 (Suggested Next Steps)</h4>
+              <ul className="list-disc pl-5 space-y-1 bg-[#F8FAFC] p-3 rounded-[10px] border border-[#E2E8F0]">
+                {aiReport.suggested_additional_experiments.map((exp, idx) => (
+                  <li key={idx} className="font-medium">{exp}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

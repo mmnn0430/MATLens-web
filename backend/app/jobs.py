@@ -58,8 +58,16 @@ def execute_analysis_run_sync(run_id: str, project_id: str, req_dict: dict[str, 
         run_dir = proj_dir / "runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        xrd_file = next((r for r in reversed(file_rows) if r["file_role"] == "xrd"), None)
-        sem_file = next((r for r in reversed(file_rows) if r["file_role"] == "sem"), None)
+        if req.selected_xrd_file_id:
+            xrd_file = next((r for r in file_rows if r["id"] == req.selected_xrd_file_id and r["file_role"] == "xrd"), None)
+        else:
+            xrd_file = next((r for r in reversed(file_rows) if r["file_role"] == "xrd"), None)
+
+        if req.selected_sem_file_id:
+            sem_file = next((r for r in file_rows if r["id"] == req.selected_sem_file_id and r["file_role"] == "sem"), None)
+        else:
+            sem_file = next((r for r in reversed(file_rows) if r["file_role"] == "sem"), None)
+
         cif_files = [r for r in file_rows if r["file_role"] == "cif"]
 
         if xrd_file is None and sem_file is None:
@@ -89,6 +97,9 @@ def execute_analysis_run_sync(run_id: str, project_id: str, req_dict: dict[str, 
                 sample_description=project_meta["description"],
                 expected_formula=project_meta["expected_formula"],
             )
+            xrd_res["source_file_id"] = xrd_file["id"]
+            xrd_res["source_filename"] = xrd_file["original_filename"]
+            xrd_res["source_sha256"] = xrd_file["sha256"]
 
         if sem_file is not None:
             _update_run_progress(run_id, "running", 60, "SEM 영역 분할 및 결정립 상(Phase) 매핑 계산 중...")
@@ -99,6 +110,13 @@ def execute_analysis_run_sync(run_id: str, project_id: str, req_dict: dict[str, 
                 xrd_result=xrd_res,
                 expected_formula=project_meta["expected_formula"],
             )
+            sem_insp = json.loads(sem_file["inspection_json"]) if sem_file["inspection_json"] else {}
+            sem_res["source_file_id"] = sem_file["id"]
+            sem_res["source_filename"] = sem_file["original_filename"]
+            sem_res["source_sha256"] = sem_file["sha256"]
+            sem_res["fov_label"] = sem_insp.get("fov_label") or sem_file["original_filename"]
+            sem_res["imaging_mode"] = sem_insp.get("imaging_mode", "SE")
+            sem_res["magnification"] = sem_insp.get("magnification", "")
             ov_path = run_dir / "overlay.png"
             roi_path = run_dir / "roi.png"
             ov_path.write_bytes(ov_bytes)
