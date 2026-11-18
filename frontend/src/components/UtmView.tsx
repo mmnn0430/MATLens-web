@@ -10,6 +10,7 @@ import {
   Play,
   Activity,
   ArrowRight,
+  Layers,
 } from "lucide-react";
 import { api } from "../api";
 import type {
@@ -17,8 +18,13 @@ import type {
   UTMParsedData,
 } from "../types";
 import { Button, Card } from "./ui/primitives";
+import { UniversalBatchUploader } from "./batch/UniversalBatchUploader";
+import { UtmBatchComparisonView } from "./batch/UtmBatchComparisonView";
+import type { UniversalDataset, UtmBatchAnalysisResult } from "../core/batch/types";
+import { utmAdapter } from "../core/batch/adapters/utmAdapter";
 
 export function UtmView() {
+  const [batchDatasets, setBatchDatasets] = useState<UniversalDataset<any, UtmBatchAnalysisResult>[]>([]);
   const [, setFile] = useState<File | null>(null);
   const [parsedData, setParsedData] = useState<UTMParsedData | null>(null);
   const [analysisResult, setAnalysisResult] = useState<UTMAnalysisResult | null>(null);
@@ -372,6 +378,25 @@ export function UtmView() {
         </div>
       </div>
 
+      {/* Unified Uploader (Accepts 1 or Multiple Files Seamlessly) */}
+      <UniversalBatchUploader
+        instrumentType="UTM"
+        datasets={batchDatasets}
+        onDatasetsChange={setBatchDatasets}
+      />
+
+      {/* Multi / Single-Specimen Universal Comparison Plotter & Summary */}
+      {batchDatasets.length > 0 && (
+        <UtmBatchComparisonView
+          datasets={batchDatasets}
+          onToggleVisible={(id) => {
+            setBatchDatasets((prev) =>
+              prev.map((d) => (d.id === id ? { ...d, visible: !d.visible } : d))
+            );
+          }}
+        />
+      )}
+
       {/* Error Banner */}
       {errorMsg && (
         <div className="rounded-[16px] bg-[#FEE2E2] border border-[#FECACA] p-4 text-[13px] text-[#DC2626] flex items-center justify-between">
@@ -389,41 +414,10 @@ export function UtmView() {
         </div>
       )}
 
-      {/* File Drop Area if no data parsed */}
-      {!parsedData && (
-        <div
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault();
-            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-              handleFileChange(e.dataTransfer.files[0]);
-            }
-          }}
-          className="border-2 border-dashed border-[#D1D5DB] rounded-[24px] p-12 text-center bg-white/60 hover:bg-white hover:border-[#3182F6] transition-all cursor-pointer"
-          onClick={() => {
-            const input = document.createElement("input");
-            input.type = "file";
-            input.accept = ".txt,.csv,.tsv,.dat";
-            input.onchange = (e: any) => {
-              if (e.target.files && e.target.files[0]) {
-                handleFileChange(e.target.files[0]);
-              }
-            };
-            input.click();
-          }}
-        >
-          <div className="w-14 h-14 rounded-full bg-[#EFF6FF] text-[#3182F6] flex items-center justify-center mx-auto mb-4">
-            <Upload className="w-7 h-7" />
-          </div>
-          <div className="text-[17px] font-bold text-[#191F28] mb-1">
-            UTM Raw Data 파일(TXT, CSV, TSV)을 이곳에 끌어다 놓으세요
-          </div>
-          <p className="text-[13px] text-[#8B95A1] max-w-md mx-auto mb-4">
-            공백·탭·쉼표 구분자, 열 이름 및 단위 행 분리 자동 인식, UTF-8 및 CP949 인코딩을 자동 지원합니다.
-          </p>
-          <Button variant="outline" size="sm">
-            컴퓨터에서 파일 선택
-          </Button>
+      {/* Legacy Single Mode Controls (Optional fine-tune when exactly 1 file is selected) */}
+      {batchDatasets.length === 0 && !parsedData && (
+        <div className="py-8 text-center text-[#8B95A1] text-[14px]">
+          상단 업로드 영역에 UTM 파일(.txt, .csv, .dat)을 1개 또는 여러 개 끌어다 놓으세요. 자동으로 분석 및 중첩 비교됩니다.
         </div>
       )}
 
