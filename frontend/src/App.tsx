@@ -1,16 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import * as Tabs from "@radix-ui/react-tabs";
 import {
   Layers,
-  SlidersHorizontal,
-  ArrowLeft,
-  Loader2,
   Microscope,
   Activity,
   KeyRound,
   Zap,
   Flame,
   Share2,
+  FolderPlus,
 } from "lucide-react";
 import { api, DEFAULT_SEM_PARAMS, DEFAULT_XRD_PARAMS } from "./api";
 import type {
@@ -21,31 +18,75 @@ import type {
   SEMParams,
   XRDParams,
 } from "./types";
-import { LandingSetup } from "./components/LandingSetup";
 import { HomeDashboard } from "./components/HomeDashboard";
-import { XrdView } from "./components/XrdView";
-import { SemView } from "./components/SemView";
+import { XrdWorkspace } from "./components/XrdWorkspace";
+import { SemWorkspace } from "./components/SemWorkspace";
 import { UtmView } from "./components/UtmView";
 import { HallView } from "./components/HallView";
 import { LfaView } from "./components/LfaView";
+import { SpectroView } from "./components/SpectroView";
 import { IntegratedAnalysisView } from "./components/IntegratedAnalysisView";
+import {
+  SampleRegistrationModal,
+  SampleSelectorBar,
+  type SampleFormPayload,
+} from "./components/SampleManagement";
 import { Button, SourceTag } from "./components/ui/primitives";
 
-export type ServiceMode = "home" | "matlens" | "utm" | "hall" | "lfa" | "integrated";
+export type ServiceMode =
+  | "home"
+  | "xrd"
+  | "sem"
+  | "matlens"
+  | "utm"
+  | "hall"
+  | "lfa"
+  | "ftir"
+  | "dsc"
+  | "tga"
+  | "integrated";
+
+function normalizeMode(rawMode: string | null, tab: string | null, projectId: string | null, sessionId: string | null): ServiceMode {
+  if (rawMode === "spectro") return "ftir";
+  if (rawMode === "matlens") {
+    return tab === "sem" ? "sem" : "xrd";
+  }
+  if (
+    rawMode === "home" ||
+    rawMode === "xrd" ||
+    rawMode === "sem" ||
+    rawMode === "utm" ||
+    rawMode === "hall" ||
+    rawMode === "lfa" ||
+    rawMode === "ftir" ||
+    rawMode === "dsc" ||
+    rawMode === "tga" ||
+    rawMode === "integrated"
+  ) {
+    return rawMode;
+  }
+  if (projectId) {
+    return tab === "sem" ? "sem" : "xrd";
+  }
+  if (sessionId) {
+    return "integrated";
+  }
+  return "home";
+}
 
 function readUrlState() {
   const sp = new URLSearchParams(window.location.search);
-  const rawMode = sp.get("mode") as ServiceMode | null;
+  const rawMode = sp.get("mode");
   const projectId = sp.get("project");
   const sessionId = sp.get("session");
-  const resolvedMode: ServiceMode =
-    rawMode || (projectId ? "matlens" : sessionId ? "integrated" : "home");
+  const tab = (sp.get("tab") as "xrd" | "sem") || null;
+  const resolvedMode = normalizeMode(rawMode, tab, projectId, sessionId);
   return {
     mode: resolvedMode,
     projectId,
     runId: sp.get("run"),
     view: (sp.get("view") as "setup" | "results") || null,
-    tab: (sp.get("tab") as "xrd" | "sem") || "xrd",
+    tab: tab || (resolvedMode === "sem" ? "sem" : "xrd"),
   };
 }
 
@@ -57,7 +98,7 @@ function writeUrlState(next: {
   tab?: "xrd" | "sem";
 }) {
   const sp = new URLSearchParams();
-  const effectiveMode = next.mode || (next.projectId ? "matlens" : "home");
+  const effectiveMode = next.mode || (next.projectId ? "xrd" : "home");
   if (effectiveMode !== "home") {
     sp.set("mode", effectiveMode);
   }
@@ -83,8 +124,6 @@ export default function App() {
   const [semParams, setSemParams] = useState<SEMParams>(DEFAULT_SEM_PARAMS);
   const [runAi, setRunAi] = useState<boolean>(true);
 
-  const [viewMode, setViewMode] = useState<"setup" | "results">("setup");
-  const [activeTab, setActiveTab] = useState<"xrd" | "sem">("xrd");
   const [isBusy, setIsBusy] = useState<boolean>(false);
   const [, setIsRetryingAi] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -93,6 +132,10 @@ export default function App() {
   const [globalGeminiModel, setGlobalGeminiModel] = useState<string>("auto");
   const [globalMpKey, setGlobalMpKey] = useState<string>("");
   const [savingGlobalApi, setSavingGlobalApi] = useState<boolean>(false);
+
+  // Sample Registration & Edit Modal State
+  const [sampleModalOpen, setSampleModalOpen] = useState<boolean>(false);
+  const [editingSampleTarget, setEditingSampleTarget] = useState<ProjectDetail | ProjectListItem | null>(null);
 
   const hydrateParamsFromProject = useCallback((proj: ProjectDetail) => {
     const cond = proj.current_conditions || {};
@@ -116,8 +159,10 @@ export default function App() {
     try {
       const list = await api.listProjects();
       setProjects(list);
+      return list;
     } catch (err: any) {
       setProjectsError(err?.message || "저장된 분석 데이터를 불러오지 못했습니다.");
+      return [];
     } finally {
       setProjectsLoading(false);
     }
@@ -127,48 +172,56 @@ export default function App() {
     async (
       projectId: string,
       preferredRunId?: string | null,
-      preferredView?: "setup" | "results",
-      isInitialUrlLoad?: boolean,
-      preferredTab?: "xrd" | "sem"
+      targetMode?: ServiceMode,
+      isInitialUrlLoad?: boolean
     ) => {
       setIsBusy(true);
       setErrorMsg(null);
-      setServiceMode("matlens");
       try {
         const proj = await api.getProject(projectId);
         setActiveProject(proj);
         hydrateParamsFromProject(proj);
 
         const targetRunId = preferredRunId || proj.latest_run_id;
+        let resolvedRun: RunDetail | null = null;
         if (targetRunId) {
-          const r = await api.getRun(targetRunId);
-          setActiveRun(r);
-          const nextView = preferredView || (r.status === "completed" || r.status === "running" ? "results" : "setup");
-          setViewMode(nextView);
-          const defaultTab =
-            preferredTab && ((preferredTab === "xrd" && r.xrd_result) || (preferredTab === "sem" && r.sem_result))
-              ? preferredTab
-              : r.xrd_result
-              ? "xrd"
-              : "sem";
-          setActiveTab(defaultTab);
-          writeUrlState({ mode: "matlens", projectId: proj.id, runId: r.id, view: nextView, tab: defaultTab });
+          resolvedRun = await api.getRun(targetRunId);
+          setActiveRun(resolvedRun);
         } else {
           setActiveRun(null);
-          setViewMode("setup");
-          writeUrlState({ mode: "matlens", projectId: proj.id, view: "setup" });
         }
+
+        const hasXrdFile = proj.files.some((f) => f.file_role === "xrd");
+        const hasSemFile = proj.files.some((f) => f.file_role === "sem");
+
+        const nextMode: ServiceMode =
+          targetMode && targetMode !== "home" && targetMode !== "matlens"
+            ? targetMode
+            : resolvedRun?.xrd_result
+            ? "xrd"
+            : resolvedRun?.sem_result
+            ? "sem"
+            : hasXrdFile
+            ? "xrd"
+            : hasSemFile
+            ? "sem"
+            : "xrd";
+
+        setServiceMode(nextMode);
+        writeUrlState({
+          mode: nextMode,
+          projectId: proj.id,
+          runId: resolvedRun?.id || null,
+        });
       } catch (err: any) {
         if (isInitialUrlLoad) {
-          // URL 링크로 들어왔으나 프로젝트가 존재하지 않거나 만료된 경우
-          // 경고 에러 배너를 띄우지 않고 깔끔하게 URL을 정리하고 기본 홈으로 진입
           writeUrlState({ mode: "home" });
           setServiceMode("home");
           setActiveProject(null);
           setActiveRun(null);
           setErrorMsg(null);
         } else {
-          setErrorMsg(err?.message || "프로젝트를 불러오지 못했습니다.");
+          setErrorMsg(err?.message || "시료 데이터를 불러오지 못했습니다.");
         }
       } finally {
         setIsBusy(false);
@@ -177,9 +230,17 @@ export default function App() {
     [hydrateParamsFromProject]
   );
 
-  // Track visited analysis modes so in-memory analysis state is preserved when returning to Home
+  // Switch active sample while keeping current instrument tab
+  const handleSelectSampleKeepMode = useCallback(
+    async (projectId: string) => {
+      await openProject(projectId, null, serviceMode === "home" ? "xrd" : serviceMode, false);
+    },
+    [openProject, serviceMode]
+  );
+
+  // Track visited analysis modes so in-memory analysis state is preserved across tab switches
   useEffect(() => {
-    if (serviceMode === "utm" || serviceMode === "hall" || serviceMode === "lfa") {
+    if (["utm", "hall", "lfa", "ftir", "dsc", "tga"].includes(serviceMode)) {
       setVisitedModes((prev) => (prev[serviceMode] ? prev : { ...prev, [serviceMode]: true }));
     }
   }, [serviceMode]);
@@ -197,16 +258,20 @@ export default function App() {
         }
       })
       .catch(() => {});
-    refreshProjectsList();
 
-    if (urlState.mode && urlState.mode !== "matlens") {
-      setServiceMode(urlState.mode);
-    } else if (urlState.projectId) {
-      if (urlState.tab) setActiveTab(urlState.tab);
-      openProject(urlState.projectId, urlState.runId, urlState.view || undefined, true, urlState.tab);
-    } else {
-      setServiceMode("matlens");
-    }
+    refreshProjectsList().then((list) => {
+      if (urlState.projectId) {
+        openProject(urlState.projectId, urlState.runId, urlState.mode, true);
+      } else if (urlState.mode !== "home") {
+        setServiceMode(urlState.mode);
+        // Auto-select most recent sample if entering an instrument tab without an explicit project param
+        if (list.length > 0 && (urlState.mode === "xrd" || urlState.mode === "sem")) {
+          openProject(list[0].id, null, urlState.mode, true);
+        }
+      } else {
+        setServiceMode("home");
+      }
+    });
   }, [openProject, refreshProjectsList]);
 
   // Synchronize active XRD and SEM measurements to shared storage for Integrated Report
@@ -223,8 +288,8 @@ export default function App() {
             timestamp: new Date().toISOString(),
           })
         );
-      } catch (e) {
-        console.warn("Failed to persist XRD data to localStorage:", e);
+      } catch {
+        // ignore
       }
     }
     const semFile = activeProject?.files?.find((f) => f.file_role === "sem");
@@ -260,8 +325,8 @@ export default function App() {
             timestamp: new Date().toISOString(),
           })
         );
-      } catch (e) {
-        console.warn("Failed to persist SEM data to localStorage:", e);
+      } catch {
+        // ignore
       }
     }
   }, [activeRun, activeProject]);
@@ -284,14 +349,18 @@ export default function App() {
             refreshProjectsList();
           }
           if (updated.status === "completed") {
-            setViewMode("results");
-            const nextTab = updated.xrd_result ? "xrd" : "sem";
-            setActiveTab((prev) => prev || nextTab);
+            const nextMode: ServiceMode =
+              serviceMode === "sem"
+                ? "sem"
+                : serviceMode === "xrd"
+                ? "xrd"
+                : updated.xrd_result
+                ? "xrd"
+                : "sem";
             writeUrlState({
+              mode: nextMode,
               projectId: updated.project_id,
               runId: updated.id,
-              view: "results",
-              tab: nextTab,
             });
           } else if (updated.error_message) {
             setErrorMsg(updated.error_message);
@@ -302,70 +371,43 @@ export default function App() {
       }
     }, 900);
     return () => window.clearInterval(timer);
-  }, [activeRun, activeProject, refreshProjectsList]);
+  }, [activeRun, activeProject, refreshProjectsList, serviceMode]);
 
-  const handleCreateProject = async (payload: {
-    sample_name: string;
-    description: string;
-    expected_elements: string[];
-    expected_formula: string;
-    is_same_sample: boolean;
-  }) => {
+  // Handle Sample Registration or Edit Modal Submit
+  const handleSampleModalSubmit = async (payload: SampleFormPayload, editingSampleId?: string) => {
     setIsBusy(true);
     setErrorMsg(null);
     try {
-      const proj = await api.createProject(payload);
-      setActiveProject(proj);
-      setActiveRun(null);
-      hydrateParamsFromProject(proj);
-      setViewMode("setup");
-      writeUrlState({ projectId: proj.id, view: "setup" });
-      refreshProjectsList();
-    } catch (err: any) {
-      setErrorMsg(err?.message || "시료 등록에 실패했습니다.");
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
-  const handleQuickImportFiles = async (files: FileList) => {
-    if (!files || files.length === 0) return;
-    setIsBusy(true);
-    setErrorMsg(null);
-    try {
-      const fileArr = Array.from(files);
-      const firstStem = fileArr[0].name.replace(/\.[^/.]+$/, "");
-      let proj = await api.createProject({
-        sample_name: firstStem || "불러온 시료",
-        description: `업로드 파일: ${fileArr.map((f) => f.name).join(", ")}`,
-        expected_elements: [],
-        expected_formula: "",
-        is_same_sample: true,
-      });
-
-      for (const f of fileArr) {
-        const ext = f.name.split(".").pop()?.toLowerCase() || "";
-        let role: "xrd" | "sem" | "cif" | null = null;
-        if (["csv", "txt", "xy", "dat", "asc", "xlsx"].includes(ext)) {
-          role = "xrd";
-        } else if (["png", "jpg", "jpeg", "tif", "tiff", "bmp"].includes(ext)) {
-          role = "sem";
-        } else if (ext === "cif") {
-          role = "cif";
+      if (editingSampleId) {
+        const updated = await api.updateProject(editingSampleId, {
+          sample_name: payload.sample_name,
+          expected_formula: payload.expected_formula,
+          sample_code: payload.sample_code,
+          processing_method: payload.processing_method,
+          experiment_memo: payload.experiment_memo,
+          description: payload.description,
+          expected_elements: payload.expected_elements,
+          is_same_sample: payload.is_same_sample,
+          change_summary: `시료 정보 수정: ${payload.sample_name}`,
+        });
+        if (activeProject?.id === editingSampleId) {
+          setActiveProject(updated);
         }
-        if (role) {
-          proj = await api.uploadFile(proj.id, role, f);
+        await refreshProjectsList();
+      } else {
+        const created = await api.createProject(payload);
+        setActiveProject(created);
+        setActiveRun(null);
+        hydrateParamsFromProject(created);
+        await refreshProjectsList();
+        if (serviceMode !== "home") {
+          writeUrlState({ mode: serviceMode, projectId: created.id });
         }
       }
-
-      setActiveProject(proj);
-      setActiveRun(null);
-      hydrateParamsFromProject(proj);
-      setViewMode("setup");
-      writeUrlState({ projectId: proj.id, view: "setup" });
-      refreshProjectsList();
+      setSampleModalOpen(false);
+      setEditingSampleTarget(null);
     } catch (err: any) {
-      setErrorMsg(err?.message || "파일 불러오기에 실패했습니다.");
+      setErrorMsg(err?.message || "시료 저장에 실패했습니다.");
     } finally {
       setIsBusy(false);
     }
@@ -374,7 +416,8 @@ export default function App() {
   const handleLoadSample = async (preset: "tio2_powder" | "sintered_grains" | "desktop_nbfesb") => {
     setIsBusy(true);
     setErrorMsg(null);
-    setServiceMode("matlens");
+    const targetMode: ServiceMode = preset === "sintered_grains" ? "sem" : "xrd";
+    setServiceMode(targetMode);
     try {
       const proj = await api.createSampleDemo(preset);
       setActiveProject(proj);
@@ -394,15 +437,6 @@ export default function App() {
       setSemParams(nextSem);
       refreshProjectsList();
 
-      if (preset === "desktop_nbfesb") {
-        // Open in setup view first so user can inspect the uploaded Desktop files & conditions before or while running
-        setViewMode("setup");
-        writeUrlState({ mode: "matlens", projectId: proj.id, view: "setup" });
-        setIsBusy(false);
-        return;
-      }
-
-      // Immediately start initial sample analysis so user experiences the full pipeline in one click
       const started = await api.startRun(proj.id, {
         xrd_params: nextXrd,
         sem_params: nextSem,
@@ -410,43 +444,26 @@ export default function App() {
       });
       const r = await api.getRun(started.run_id);
       setActiveRun(r);
-      setViewMode("results");
-      writeUrlState({ mode: "matlens", projectId: proj.id, runId: r.id, view: "results", tab: "xrd" });
+      writeUrlState({ mode: targetMode, projectId: proj.id, runId: r.id });
     } catch (err: any) {
       setErrorMsg(err?.message || "샘플 프로젝트 생성에 실패했습니다.");
       setIsBusy(false);
     }
   };
 
-  const handleUploadFile = async (role: "xrd" | "sem" | "cif", file: File) => {
-    if (!activeProject) return;
+  // Multi-file upload without resetting existing uploaded files
+  const handleUploadMultipleFiles = async (role: "xrd" | "sem" | "cif", files: File[]) => {
+    if (!activeProject || files.length === 0) return;
     setIsBusy(true);
     setErrorMsg(null);
     try {
-      const proj = await api.uploadFile(activeProject.id, role, file);
-      setActiveProject(proj);
-      hydrateParamsFromProject(proj);
-      refreshProjectsList();
-
-      if (role === "sem") {
-        const semFile = proj.files?.find((f) => f.file_role === "sem");
-        if (semFile) {
-          try {
-            localStorage.setItem(
-              "matlens_shared_sem_data",
-              JSON.stringify({
-                grain_size_um: 2.4,
-                porosity_pct: 1.2,
-                sample_id: proj.sample_name || "SEM-Sample",
-                image_url: api.rawFileUrl(proj.id, semFile.id),
-                timestamp: new Date().toISOString(),
-              })
-            );
-          } catch {
-            // ignore
-          }
-        }
+      let latestProj = activeProject;
+      for (const file of files) {
+        latestProj = await api.uploadFile(latestProj.id, role, file);
       }
+      setActiveProject(latestProj);
+      hydrateParamsFromProject(latestProj);
+      await refreshProjectsList();
     } catch (err: any) {
       setErrorMsg(err?.message || "파일 업로드 중 오류가 발생했습니다.");
     } finally {
@@ -463,28 +480,23 @@ export default function App() {
       setActiveProject(proj);
       hydrateParamsFromProject(proj);
       refreshProjectsList();
-
-      if (role === "sem") {
-        const semFile = proj.files?.find((f) => f.file_role === "sem");
-        if (semFile) {
-          try {
-            localStorage.setItem(
-              "matlens_shared_sem_data",
-              JSON.stringify({
-                grain_size_um: 2.4,
-                porosity_pct: 1.2,
-                sample_id: proj.sample_name || "SEM-Sample",
-                image_url: api.rawFileUrl(proj.id, semFile.id),
-                timestamp: new Date().toISOString(),
-              })
-            );
-          } catch {
-            // ignore
-          }
-        }
-      }
     } catch (err: any) {
       setErrorMsg(err?.message || "바탕화면 파일 업로드 중 오류가 발생했습니다.");
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleDeleteFile = async (fileId: string) => {
+    if (!activeProject) return;
+    setIsBusy(true);
+    setErrorMsg(null);
+    try {
+      const proj = await api.deleteProjectFile(activeProject.id, fileId);
+      setActiveProject(proj);
+      refreshProjectsList();
+    } catch (err: any) {
+      setErrorMsg(err?.message || "파일 삭제에 실패했습니다.");
     } finally {
       setIsBusy(false);
     }
@@ -501,27 +513,47 @@ export default function App() {
     }
   };
 
-  const handleStartRun = async () => {
+  const handleStartRunWithSelection = async (
+    selectedXrdFileId?: string | null,
+    selectedSemFileId?: string | null,
+    overrideSemParams?: SEMParams
+  ) => {
     if (!activeProject) return;
     setIsBusy(true);
     setErrorMsg(null);
     try {
       const started = await api.startRun(activeProject.id, {
         xrd_params: xrdParams,
-        sem_params: semParams,
+        sem_params: overrideSemParams || semParams,
         run_ai_interpretation: runAi,
+        selected_xrd_file_id: selectedXrdFileId || null,
+        selected_sem_file_id: selectedSemFileId || null,
       });
       const r = await api.getRun(started.run_id);
       setActiveRun(r);
-      setViewMode("results");
       writeUrlState({
+        mode: serviceMode,
         projectId: activeProject.id,
         runId: r.id,
-        view: "results",
-        tab: activeTab,
       });
     } catch (err: any) {
       setErrorMsg(err?.message || "분석 실행 요청에 실패했습니다.");
+      setIsBusy(false);
+    }
+  };
+
+  const handleSelectSavedRun = async (runId: string) => {
+    if (!activeProject) return;
+    setIsBusy(true);
+    try {
+      const r = await api.getRun(runId);
+      setActiveRun(r);
+      if (r.params?.xrd_params) setXrdParams(r.params.xrd_params);
+      if (r.params?.sem_params) setSemParams(r.params.sem_params);
+      writeUrlState({ mode: serviceMode, projectId: activeProject.id, runId: r.id });
+    } catch (err: any) {
+      setErrorMsg(err?.message || "이전 실행 결과를 불러오지 못했습니다.");
+    } finally {
       setIsBusy(false);
     }
   };
@@ -582,7 +614,7 @@ export default function App() {
       if (activeProject?.id === projectId) {
         setActiveProject(null);
         setActiveRun(null);
-        writeUrlState({ mode: serviceMode === "home" ? "home" : "matlens" });
+        writeUrlState({ mode: serviceMode });
       }
       refreshProjectsList();
     } catch (err: any) {
@@ -590,23 +622,19 @@ export default function App() {
     }
   };
 
-  // Legacy run selection helper retained for backward compatibility
-  const _handleSelectSavedRun = async (runId: string) => {
-    if (!activeProject) return;
-    setIsBusy(true);
-    try {
-      const r = await api.getRun(runId);
-      setActiveRun(r);
-      if (r.params?.xrd_params) setXrdParams(r.params.xrd_params);
-      if (r.params?.sem_params) setSemParams(r.params.sem_params);
-      writeUrlState({ projectId: activeProject.id, runId: r.id, view: "results", tab: activeTab });
-    } catch (err: any) {
-      setErrorMsg(err?.message || "이전 실행 결과를 불러오지 못했습니다.");
-    } finally {
-      setIsBusy(false);
+  const switchMode = (nextMode: ServiceMode) => {
+    setServiceMode(nextMode);
+    setErrorMsg(null);
+    if ((nextMode === "xrd" || nextMode === "sem") && !activeProject && projects.length > 0) {
+      openProject(projects[0].id, null, nextMode, false);
+      return;
     }
+    writeUrlState({
+      mode: nextMode,
+      projectId: nextMode === "home" ? null : activeProject?.id,
+      runId: nextMode === "xrd" || nextMode === "sem" ? activeRun?.id : null,
+    });
   };
-  void _handleSelectSavedRun;
 
   const isJobRunning = activeRun?.status === "queued" || activeRun?.status === "running";
 
@@ -615,7 +643,7 @@ export default function App() {
       {/* Top Navigation Header */}
       <header className="sticky top-0 z-40 w-full bg-white/95 backdrop-blur border-b border-[#E5E8EB]">
         <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-8 min-h-16 py-2 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 max-w-full">
             <button
               type="button"
               onClick={() => {
@@ -634,88 +662,133 @@ export default function App() {
               <span>MatLens</span>
             </button>
 
-            {/* Service Mode Toggle Switcher */}
-            <div className="flex items-center p-0.5 rounded-[10px] bg-[#F2F4F6] border border-[#E5E8EB] ml-1 sm:ml-2 gap-0.5 shrink-0 whitespace-nowrap">
+            {/* Independent Instrument Tabs Navigation */}
+            <nav
+              aria-label="주요 분석 기기 탭"
+              className="flex items-center p-0.5 rounded-[10px] bg-[#F2F4F6] border border-[#E5E8EB] ml-1 sm:ml-2 gap-0.5 overflow-x-auto max-w-full whitespace-nowrap"
+            >
               <button
                 type="button"
-                onClick={() => {
-                  setServiceMode("matlens");
-                  writeUrlState({ mode: "matlens", projectId: activeProject?.id, runId: activeRun?.id, view: viewMode, tab: activeTab });
-                }}
-                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all ${
-                  serviceMode === "matlens"
-                    ? "bg-white text-[#191F28] shadow-sm font-bold"
+                onClick={() => switchMode("xrd")}
+                className={`px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 cursor-pointer ${
+                  serviceMode === "xrd"
+                    ? "bg-white text-[#3182F6] shadow-xs font-bold"
                     : "text-[#6B7684] hover:text-[#191F28]"
                 }`}
               >
-                XRD·SEM
+                <Activity className="w-3 h-3 text-[#3182F6]" />
+                <span>XRD</span>
               </button>
+
               <button
                 type="button"
-                onClick={() => {
-                  setServiceMode("utm");
-                  writeUrlState({ mode: "utm" });
-                }}
-                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all ${
+                onClick={() => switchMode("sem")}
+                className={`px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 cursor-pointer ${
+                  serviceMode === "sem"
+                    ? "bg-white text-[#15803D] shadow-xs font-bold"
+                    : "text-[#6B7684] hover:text-[#191F28]"
+                }`}
+              >
+                <Microscope className="w-3 h-3 text-[#15803D]" />
+                <span>SEM</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => switchMode("utm")}
+                className={`px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all cursor-pointer ${
                   serviceMode === "utm"
-                    ? "bg-white text-[#3182F6] shadow-sm font-bold"
+                    ? "bg-white text-[#3182F6] shadow-xs font-bold"
                     : "text-[#6B7684] hover:text-[#191F28]"
                 }`}
               >
                 UTM
               </button>
+
               <button
                 type="button"
-                onClick={() => {
-                  setServiceMode("hall");
-                  writeUrlState({ mode: "hall" });
-                }}
-                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 ${
+                onClick={() => switchMode("hall")}
+                className={`px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 cursor-pointer ${
                   serviceMode === "hall"
-                    ? "bg-white text-[#2563EB] shadow-sm font-bold"
+                    ? "bg-white text-[#2563EB] shadow-xs font-bold"
                     : "text-[#6B7684] hover:text-[#191F28]"
                 }`}
               >
                 <Zap className="w-3 h-3 text-[#2563EB]" />
-                Hall
+                <span>Hall</span>
               </button>
+
               <button
                 type="button"
-                onClick={() => {
-                  setServiceMode("lfa");
-                  writeUrlState({ mode: "lfa" });
-                }}
-                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 ${
+                onClick={() => switchMode("lfa")}
+                className={`px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 cursor-pointer ${
                   serviceMode === "lfa"
-                    ? "bg-white text-[#D97706] shadow-sm font-bold"
+                    ? "bg-white text-[#D97706] shadow-xs font-bold"
                     : "text-[#6B7684] hover:text-[#191F28]"
                 }`}
               >
                 <Flame className="w-3 h-3 text-[#D97706]" />
-                LFA
+                <span>LFA</span>
               </button>
+
               <button
                 type="button"
-                onClick={() => {
-                  setServiceMode("integrated");
-                  writeUrlState({ mode: "integrated" });
-                }}
-                className={`px-2 sm:px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 ${
+                onClick={() => switchMode("ftir")}
+                className={`px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 cursor-pointer ${
+                  serviceMode === "ftir"
+                    ? "bg-white text-[#4F46E5] shadow-xs font-bold"
+                    : "text-[#6B7684] hover:text-[#191F28]"
+                }`}
+              >
+                <Activity className="w-3 h-3 text-[#4F46E5]" />
+                <span>FT-IR</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => switchMode("dsc")}
+                className={`px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 cursor-pointer ${
+                  serviceMode === "dsc"
+                    ? "bg-white text-[#DB2777] shadow-xs font-bold"
+                    : "text-[#6B7684] hover:text-[#191F28]"
+                }`}
+              >
+                <Flame className="w-3 h-3 text-[#DB2777]" />
+                <span>DSC</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => switchMode("tga")}
+                className={`px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 cursor-pointer ${
+                  serviceMode === "tga"
+                    ? "bg-white text-[#059669] shadow-xs font-bold"
+                    : "text-[#6B7684] hover:text-[#191F28]"
+                }`}
+              >
+                <Flame className="w-3 h-3 text-[#059669]" />
+                <span>TGA</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => switchMode("integrated")}
+                className={`px-2.5 py-1 rounded-[8px] text-[12px] font-semibold transition-all flex items-center gap-1 cursor-pointer ${
                   serviceMode === "integrated"
-                    ? "bg-white text-[#7C3AED] shadow-sm font-bold"
+                    ? "bg-white text-[#7C3AED] shadow-xs font-bold"
                     : "text-[#6B7684] hover:text-[#191F28]"
                 }`}
               >
                 <Share2 className="w-3 h-3 text-[#7C3AED]" />
-                통합 리포트
+                <span>통합 리포트</span>
               </button>
-            </div>
+            </nav>
 
-            {serviceMode === "matlens" && activeProject && (
+            {serviceMode !== "home" && activeProject && (
               <>
-                <span className="hidden xl:inline text-[#E5E8EB] text-[18px]">/</span>
-                <div className="hidden xl:flex items-center gap-2 min-w-0 max-w-[260px] 2xl:max-w-[420px] overflow-hidden">
-                  <span className="text-[14px] font-semibold text-[#191F28] truncate">
+                <span className="hidden 2xl:inline text-[#E5E8EB] text-[18px]">/</span>
+                <div className="hidden 2xl:flex items-center gap-2 min-w-0 max-w-[260px] overflow-hidden">
+                  <span className="text-[13px] font-semibold text-[#191F28] truncate">
                     {activeProject.sample_name}
                   </span>
                   {activeProject.is_sample_demo && <SourceTag kind="샘플" />}
@@ -725,82 +798,33 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {(serviceMode === "matlens" || serviceMode === "home") && (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setShowGlobalApiPanel((v) => !v)}
-              >
-                <KeyRound className="w-4 h-4 text-[#3182F6]" />
-                <span className="hidden sm:inline">Gemini · API 설정</span>
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    health?.gemini_api_configured ? "bg-[#16A34A]" : "bg-[#D97706]"
-                  }`}
-                />
-              </Button>
-            )}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setEditingSampleTarget(null);
+                setSampleModalOpen(true);
+              }}
+            >
+              <FolderPlus className="w-4 h-4 text-[#3182F6]" />
+              <span className="hidden sm:inline">시료 등록하기</span>
+            </Button>
 
-            {serviceMode === "matlens" && activeProject && (
-              <>
-                {activeRun && viewMode === "setup" && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="primary"
-                    onClick={() => {
-                      setViewMode("results");
-                      writeUrlState({
-                        mode: "matlens",
-                        projectId: activeProject.id,
-                        runId: activeRun.id,
-                        view: "results",
-                        tab: activeTab,
-                      });
-                    }}
-                  >
-                    결과 화면으로
-                  </Button>
-                )}
-
-                {viewMode === "results" && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setViewMode("setup");
-                      writeUrlState({
-                        mode: "matlens",
-                        projectId: activeProject.id,
-                        runId: activeRun?.id,
-                        view: "setup",
-                      });
-                    }}
-                  >
-                    <SlidersHorizontal className="w-4 h-4" />
-                    <span className="hidden sm:inline">시료·파일 조건</span>
-                  </Button>
-                )}
-
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setActiveProject(null);
-                    setActiveRun(null);
-                    setErrorMsg(null);
-                    writeUrlState({ mode: "matlens" });
-                    refreshProjectsList();
-                  }}
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                  <span className="hidden sm:inline">시료 목록</span>
-                </Button>
-              </>
-            )}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setShowGlobalApiPanel((v) => !v)}
+            >
+              <KeyRound className="w-4 h-4 text-[#3182F6]" />
+              <span className="hidden sm:inline">Gemini · API 설정</span>
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  health?.gemini_api_configured ? "bg-[#16A34A]" : "bg-[#D97706]"
+                }`}
+              />
+            </Button>
           </div>
         </div>
 
@@ -822,7 +846,7 @@ export default function App() {
                   </span>
                 </div>
                 <span className="text-[12px] text-[#6B7684]">
-                  .env 파일을 열지 않고 여기서 바로 키와 Gemini 버전을 설정할 수 있습니다 (또는 일반 텍스트 <code>api_config.txt</code> 편집 가능)
+                  .env 파일을 열지 않고 여기서 바로 키와 Gemini 버전을 설정할 수 있습니다
                 </span>
               </div>
 
@@ -857,17 +881,7 @@ export default function App() {
                       health?.gemini_models || [
                         { id: "auto", label: "자동 선택 (가용 Gemini 버전 자동 탐색·폴백)" },
                         { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash (빠르고 정확한 표준 멀티모달 · 권장)" },
-                        { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite (초고속 1~2초 응답)" },
-                        { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite (경량 고속 멀티모달)" },
-                        { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash (최신 심층 추론 멀티모달)" },
-                        { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash (고정밀 멀티모달)" },
-                        { id: "gemini-3.6-flash", label: "Gemini 3.6 Flash (균형형 멀티모달)" },
-                        { id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" },
-                        { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview (고정밀 심층 추론)" },
-                        { id: "gemini-flash-latest", label: "Gemini Flash Latest (최신 Flash 별칭)" },
-                        { id: "gemini-flash-lite-latest", label: "Gemini Flash-Lite Latest (최신 Lite 별칭)" },
-                        { id: "gemini-pro-latest", label: "Gemini Pro Latest (최신 Pro 별칭)" },
-                        { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (구버전 호환 · 미지원 시 3.5 자동 전환)" },
+                        { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (표준 호환)" },
                       ]
                     ).map((m) => (
                       <option key={m.id} value={m.id}>
@@ -910,13 +924,53 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-8 py-6 sm:py-8">
+        {errorMsg && (
+          <div className="mb-5 rounded-[16px] bg-[#FEE2E2] border border-[#FECACA] p-4 text-[13px] text-[#DC2626] flex justify-between items-center">
+            <span>{errorMsg}</span>
+            <button
+              type="button"
+              onClick={() => setErrorMsg(null)}
+              className="font-semibold underline px-2 min-h-[36px] cursor-pointer"
+            >
+              닫기
+            </button>
+          </div>
+        )}
+
+        {/* Common Sample Selector Bar across all analysis instruments */}
+        {serviceMode !== "home" && (
+          <SampleSelectorBar
+            projects={projects}
+            activeProject={activeProject}
+            currentInstrument={
+              serviceMode === "matlens" ? "xrd" : serviceMode
+            }
+            onSelectSample={handleSelectSampleKeepMode}
+            onOpenRegisterModal={() => {
+              setEditingSampleTarget(null);
+              setSampleModalOpen(true);
+            }}
+            onOpenEditModal={() => {
+              if (activeProject) {
+                setEditingSampleTarget(activeProject);
+                setSampleModalOpen(true);
+              }
+            }}
+            onProjectUpdated={async () => {
+              if (activeProject) {
+                const p = await api.getProject(activeProject.id);
+                setActiveProject(p);
+              }
+              refreshProjectsList();
+            }}
+          />
+        )}
+
+        {/* Persistent Mounted Instrument Views (preserving in-memory state across tab navigation) */}
         {(visitedModes.utm || serviceMode === "utm") && (
           <div className={serviceMode === "utm" ? "block" : "hidden"}>
             <UtmView
-              onNavigateToIntegrated={() => {
-                setServiceMode("integrated");
-                writeUrlState({ mode: "integrated" });
-              }}
+              onNavigateToIntegrated={() => switchMode("integrated")}
             />
           </div>
         )}
@@ -924,10 +978,7 @@ export default function App() {
         {(visitedModes.hall || serviceMode === "hall") && (
           <div className={serviceMode === "hall" ? "block" : "hidden"}>
             <HallView
-              onNavigateToIntegrated={() => {
-                setServiceMode("integrated");
-                writeUrlState({ mode: "integrated" });
-              }}
+              onNavigateToIntegrated={() => switchMode("integrated")}
             />
           </div>
         )}
@@ -935,14 +986,63 @@ export default function App() {
         {(visitedModes.lfa || serviceMode === "lfa") && (
           <div className={serviceMode === "lfa" ? "block" : "hidden"}>
             <LfaView
-              onNavigateToIntegrated={() => {
-                setServiceMode("integrated");
-                writeUrlState({ mode: "integrated" });
+              onNavigateToIntegrated={() => switchMode("integrated")}
+            />
+          </div>
+        )}
+
+        {(visitedModes.ftir || serviceMode === "ftir") && (
+          <div className={serviceMode === "ftir" ? "block" : "hidden"}>
+            <SpectroView
+              initialInstrument="ftir"
+              lockedInstrument="ftir"
+              activeSample={activeProject}
+              onRecordSaved={async () => {
+                if (activeProject) {
+                  const p = await api.getProject(activeProject.id);
+                  setActiveProject(p);
+                }
+                refreshProjectsList();
               }}
             />
           </div>
         )}
 
+        {(visitedModes.dsc || serviceMode === "dsc") && (
+          <div className={serviceMode === "dsc" ? "block" : "hidden"}>
+            <SpectroView
+              initialInstrument="dsc"
+              lockedInstrument="dsc"
+              activeSample={activeProject}
+              onRecordSaved={async () => {
+                if (activeProject) {
+                  const p = await api.getProject(activeProject.id);
+                  setActiveProject(p);
+                }
+                refreshProjectsList();
+              }}
+            />
+          </div>
+        )}
+
+        {(visitedModes.tga || serviceMode === "tga") && (
+          <div className={serviceMode === "tga" ? "block" : "hidden"}>
+            <SpectroView
+              initialInstrument="tga"
+              lockedInstrument="tga"
+              activeSample={activeProject}
+              onRecordSaved={async () => {
+                if (activeProject) {
+                  const p = await api.getProject(activeProject.id);
+                  setActiveProject(p);
+                }
+                refreshProjectsList();
+              }}
+            />
+          </div>
+        )}
+
+        {/* Active View Render */}
         {serviceMode === "home" ? (
           <HomeDashboard
             health={health}
@@ -951,173 +1051,89 @@ export default function App() {
             projectsError={projectsError}
             isBusy={isBusy || isJobRunning}
             onRefreshProjects={refreshProjectsList}
-            onOpenProject={(pid, preferredTab, preferredView) =>
-              openProject(pid, null, preferredView, false, preferredTab)
+            onOpenProject={(pid, targetMode) =>
+              openProject(pid, null, targetMode || "xrd", false)
             }
             onDeleteProject={handleDeleteProject}
-            onNavigateMode={(nextMode, resetProject) => {
-              if (resetProject) {
-                setActiveProject(null);
-                setActiveRun(null);
-                setViewMode("setup");
-                setServiceMode(nextMode);
-                writeUrlState({ mode: nextMode });
-                return;
-              }
-              setServiceMode(nextMode);
-              if (nextMode === "matlens") {
-                writeUrlState({
-                  mode: "matlens",
-                  projectId: activeProject?.id,
-                  runId: activeRun?.id,
-                  view: viewMode,
-                  tab: activeTab,
-                });
-              } else {
-                writeUrlState({ mode: nextMode });
-              }
-            }}
+            onNavigateMode={(nextMode) => switchMode(nextMode)}
             onLoadSample={handleLoadSample}
+            onOpenRegisterModal={() => {
+              setEditingSampleTarget(null);
+              setSampleModalOpen(true);
+            }}
+            onOpenEditSampleModal={(sample) => {
+              setEditingSampleTarget(sample);
+              setSampleModalOpen(true);
+            }}
           />
-        ) : serviceMode === "utm" || serviceMode === "hall" || serviceMode === "lfa" ? null : serviceMode === "integrated" ? (
-          <IntegratedAnalysisView activeProject={activeProject} activeRun={activeRun} />
-        ) : viewMode === "setup" || !activeProject ? (
-          <LandingSetup
+        ) : serviceMode === "xrd" || serviceMode === "matlens" ? (
+          <XrdWorkspace
             health={health}
-            projects={projects}
             activeProject={activeProject}
+            activeRun={activeRun}
             xrdParams={xrdParams}
+            runAi={runAi}
+            isBusy={isBusy}
+            isJobRunning={isJobRunning}
+            onChangeXrdParams={setXrdParams}
+            onChangeRunAi={setRunAi}
+            onUpdateProjectMeta={handleUpdateProjectMeta}
+            onUploadMultipleFiles={handleUploadMultipleFiles}
+            onUploadFromDesktop={handleUploadFromDesktop}
+            onDeleteFile={handleDeleteFile}
+            onStartXrdRun={(selectedXrdFileId) =>
+              handleStartRunWithSelection(selectedXrdFileId, null)
+            }
+            onSelectRun={handleSelectSavedRun}
+            onLoadSample={handleLoadSample}
+            onOpenRegisterModal={() => {
+              setEditingSampleTarget(null);
+              setSampleModalOpen(true);
+            }}
+            onNavigateToSem={() => switchMode("sem")}
+            onNavigateToIntegrated={() => switchMode("integrated")}
+          />
+        ) : serviceMode === "sem" ? (
+          <SemWorkspace
+            activeProject={activeProject}
+            activeRun={activeRun}
             semParams={semParams}
             runAi={runAi}
-            isBusy={isBusy || isJobRunning}
-            errorMsg={errorMsg}
-            onClearError={() => setErrorMsg(null)}
-            onSelectProject={(pid) => openProject(pid)}
-            onDeleteProject={handleDeleteProject}
-            onCreateProject={handleCreateProject}
-            onQuickImportFiles={handleQuickImportFiles}
-            onLoadSample={handleLoadSample}
-            onUpdateProjectMeta={handleUpdateProjectMeta}
-            onUploadFile={handleUploadFile}
-            onUploadFromDesktop={handleUploadFromDesktop}
-            onChangeXrdParams={setXrdParams}
+            isBusy={isBusy}
+            isJobRunning={isJobRunning}
             onChangeSemParams={setSemParams}
             onChangeRunAi={setRunAi}
-            onStartRun={handleStartRun}
-            onNavigateToUtm={() => {
-              setServiceMode("utm");
-              writeUrlState({ mode: "utm" });
+            onUploadMultipleFiles={handleUploadMultipleFiles}
+            onUploadFromDesktop={handleUploadFromDesktop}
+            onDeleteFile={handleDeleteFile}
+            onStartSemRun={(selectedSemFileId, overrideParams) =>
+              handleStartRunWithSelection(null, selectedSemFileId, overrideParams)
+            }
+            onSelectRun={handleSelectSavedRun}
+            onLoadSample={handleLoadSample}
+            onOpenRegisterModal={() => {
+              setEditingSampleTarget(null);
+              setSampleModalOpen(true);
             }}
+            onNavigateToXrd={() => switchMode("xrd")}
+            onNavigateToIntegrated={() => switchMode("integrated")}
           />
-        ) : (
-          <div className="space-y-6">
-            {errorMsg && (
-              <div className="rounded-[16px] bg-[#FEE2E2] border border-[#FECACA] p-4 text-[13px] text-[#DC2626] flex justify-between items-center">
-                <span>{errorMsg}</span>
-                <button
-                  type="button"
-                  onClick={() => setErrorMsg(null)}
-                  className="font-semibold underline px-2 min-h-[44px] cursor-pointer"
-                >
-                  닫기
-                </button>
-              </div>
-            )}
-
-            {/* Background Job Running Progress Card */}
-            {isJobRunning && activeRun && (
-              <div className="rounded-[20px] bg-white border border-[#BFDBFE] p-8 text-center space-y-4">
-                <Loader2 className="w-8 h-8 text-[#3182F6] animate-spin mx-auto" />
-                <div className="text-[18px] font-bold text-[#191F28]">
-                  분석 엔진이 데이터를 계산하고 있습니다 (Run #{activeRun.run_number})
-                </div>
-                <p className="text-[14px] text-[#6B7684]">{activeRun.stage_message}</p>
-                <div className="max-w-md mx-auto h-2.5 bg-[#F2F4F6] rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-[#3182F6] transition-all duration-300"
-                    style={{ width: `${Math.max(10, activeRun.progress_pct)}%` }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Completed Results Tabs: [XRD] [SEM] */}
-            {activeRun && activeRun.status === "completed" && (
-              <Tabs.Root
-                value={activeTab}
-                onValueChange={(val) => {
-                  const t = val as "xrd" | "sem";
-                  setActiveTab(t);
-                  writeUrlState({
-                    mode: "matlens",
-                    projectId: activeProject.id,
-                    runId: activeRun.id,
-                    view: "results",
-                    tab: t,
-                  });
-                }}
-                className="space-y-6"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <Tabs.List className="inline-flex p-1.5 rounded-[16px] bg-white border border-[#E5E8EB] gap-1 shadow-sm">
-                    <Tabs.Trigger
-                      value="xrd"
-                      className="inline-flex items-center gap-2 min-h-[44px] px-4 sm:px-5 rounded-[12px] text-[14px] font-semibold text-[#6B7684] data-[state=active]:bg-[#3182F6] data-[state=active]:text-white transition-colors cursor-pointer"
-                    >
-                      <Activity className="w-4 h-4" />
-                      XRD
-                    </Tabs.Trigger>
-                    <Tabs.Trigger
-                      value="sem"
-                      className="inline-flex items-center gap-2 min-h-[44px] px-4 sm:px-5 rounded-[12px] text-[14px] font-semibold text-[#6B7684] data-[state=active]:bg-[#3182F6] data-[state=active]:text-white transition-colors cursor-pointer"
-                    >
-                      <Microscope className="w-4 h-4" />
-                      SEM
-                    </Tabs.Trigger>
-                  </Tabs.List>
-
-                  <div className="text-[13px] text-[#6B7684] font-medium">
-                    실행 버전: <strong className="text-[#191F28]">Run #{activeRun.run_number}</strong> ·{" "}
-                    {new Date(activeRun.created_at).toLocaleString("ko-KR")}
-                  </div>
-                </div>
-
-                <Tabs.Content value="xrd" className="outline-none">
-                  <XrdView
-                    runId={activeRun.id}
-                    xrdResult={activeRun.xrd_result}
-                    xrdParams={xrdParams}
-                    expectedElements={activeProject.expected_elements}
-                    isBusy={isBusy || isJobRunning}
-                    onChangeParams={setXrdParams}
-                    onChangeExpectedElements={(nextElems) =>
-                      handleUpdateProjectMeta({
-                        expected_elements: nextElems,
-                        change_summary: `예상 원소 변경: ${nextElems.join(", ") || "없음"}`,
-                      })
-                    }
-                    onRerun={handleStartRun}
-                    onNavigateToIntegrated={() => setServiceMode("integrated")}
-                  />
-                </Tabs.Content>
-
-                <Tabs.Content value="sem" className="outline-none">
-                  <SemView
-                    runId={activeRun.id}
-                    semResult={activeRun.sem_result}
-                    xrdResult={activeRun.xrd_result}
-                    semParams={semParams}
-                    isBusy={isBusy || isJobRunning}
-                    onChangeParams={setSemParams}
-                    onRerun={handleStartRun}
-                    onNavigateToIntegrated={() => setServiceMode("integrated")}
-                  />
-                </Tabs.Content>
-              </Tabs.Root>
-            )}
-          </div>
-        )}
+        ) : serviceMode === "integrated" ? (
+          <IntegratedAnalysisView activeProject={activeProject} activeRun={activeRun} />
+        ) : null}
       </main>
+
+      {/* Global Sample Registration & Edit Modal */}
+      <SampleRegistrationModal
+        open={sampleModalOpen}
+        initialSample={editingSampleTarget}
+        isBusy={isBusy}
+        onClose={() => {
+          setSampleModalOpen(false);
+          setEditingSampleTarget(null);
+        }}
+        onSubmit={handleSampleModalSubmit}
+      />
     </div>
   );
 }

@@ -99,6 +99,103 @@ app.include_router(api_v1_router)
 
 
 # ---------------- Helper Serializers ---------------- #
+def _extract_run_summary(r: Any) -> dict[str, Any]:
+    out = {
+        "id": r["id"],
+        "run_number": r["run_number"],
+        "status": r["status"],
+        "progress_pct": r["progress_pct"],
+        "stage_message": r["stage_message"],
+        "error_message": r["error_message"],
+        "created_at": r["created_at"],
+        "completed_at": r["completed_at"],
+        "xrd_file_id": None,
+        "sem_file_id": None,
+        "xrd_summary": None,
+        "sem_summary": None,
+    }
+    try:
+        params_obj = json.loads(r["params_json"]) if r["params_json"] else {}
+    except Exception:
+        params_obj = {}
+    try:
+        xrd_obj = json.loads(r["xrd_result_json"]) if r["xrd_result_json"] else None
+    except Exception:
+        xrd_obj = None
+    try:
+        sem_obj = json.loads(r["sem_result_json"]) if r["sem_result_json"] else None
+    except Exception:
+        sem_obj = None
+
+    xrd_fid = (xrd_obj or {}).get("source_file_id") or params_obj.get("selected_xrd_file_id")
+    sem_fid = (sem_obj or {}).get("source_file_id") or params_obj.get("selected_sem_file_id")
+    out["xrd_file_id"] = xrd_fid
+    out["sem_file_id"] = sem_fid
+
+    if xrd_obj:
+        cands = (xrd_obj.get("phase_matching") or {}).get("candidates") or []
+        top_cand = cands[0] if cands else {}
+        out["xrd_summary"] = {
+            "source_file_id": xrd_fid,
+            "source_filename": xrd_obj.get("source_filename"),
+            "peak_count": len(xrd_obj.get("peaks") or []),
+            "primary_phase": top_cand.get("name"),
+            "primary_formula": top_cand.get("formula"),
+            "scherrer_mean_nm": (xrd_obj.get("scherrer") or {}).get("mean_nm"),
+        }
+    if sem_obj:
+        stats = sem_obj.get("summary_stats") or {}
+        g_int = sem_obj.get("grain_intercept") or {}
+        por = sem_obj.get("porosity") or {}
+        scale_info = sem_obj.get("scale") or {}
+        out["sem_summary"] = {
+            "source_file_id": sem_fid,
+            "source_filename": sem_obj.get("source_filename"),
+            "fov_label": sem_obj.get("fov_label"),
+            "mode": sem_obj.get("mode", "particle"),
+            "unit": scale_info.get("display_unit", "µm"),
+            "scale_confirmed": bool(scale_info.get("confirmed")),
+            "count": stats.get("count") if sem_obj.get("mode") != "grain" else g_int.get("n_intersections"),
+            "mean_size": stats.get("mean_diameter") or g_int.get("mean_intercept_length") or stats.get("d50"),
+            "d10": stats.get("d10"),
+            "d50": stats.get("d50"),
+            "d90": stats.get("d90"),
+            "porosity_pct": por.get("porosity_fraction_pct") if por.get("porosity_fraction_pct") is not None else por.get("porosity_percent"),
+        }
+    return out
+
+
+def _compute_instrument_counts(conn: Any, project_id: str) -> dict[str, int]:
+    counts: dict[str, int] = {
+        "XRD": 0,
+        "SEM": 0,
+        "UTM": 0,
+        "HALL": 0,
+        "LFA": 0,
+        "FTIR": 0,
+        "DSC": 0,
+        "TGA": 0,
+    }
+    for row in conn.execute(
+        "SELECT file_role, COUNT(*) AS c FROM project_files WHERE project_id = ? GROUP BY file_role",
+        (project_id,),
+    ).fetchall():
+        role_up = str(row["file_role"] or "").upper()
+        if role_up in counts:
+            counts[role_up] += int(row["c"])
+    try:
+        for row in conn.execute(
+            "SELECT instrument_type, COUNT(*) AS c FROM sample_measurements WHERE sample_id = ? GROUP BY instrument_type",
+            (project_id,),
+        ).fetchall():
+            inst_up = str(row["instrument_type"] or "").upper().replace("-", "")
+            if inst_up in counts:
+                counts[inst_up] += int(row["c"])
+    except Exception:
+        pass
+    return counts
+
+
 def _serialize_project(project_id: str) -> dict[str, Any]:
     with get_conn() as conn:
         proj = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
@@ -109,7 +206,8 @@ def _serialize_project(project_id: str) -> dict[str, Any]:
         ).fetchall()
         runs = conn.execute(
             """
-            SELECT id, run_number, status, progress_pct, stage_message, error_message, created_at, completed_at
+            SELECT id, run_number, status, progress_pct, stage_message, error_message,
+                   params_json, xrd_result_json, sem_result_json, created_at, completed_at
             FROM analysis_runs WHERE project_id = ? ORDER BY run_number DESC
             """,
             (project_id,),
@@ -122,6 +220,7 @@ def _serialize_project(project_id: str) -> dict[str, Any]:
             "SELECT id, run_id, status, model_name, created_at FROM ai_reports WHERE project_id = ? AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
             (project_id,),
         ).fetchone()
+        inst_counts = _compute_instrument_counts(conn, project_id)
 
     latest_run_id = runs[0]["id"] if runs else None
     has_outdated_ai = bool(latest_ai and latest_run_id and latest_ai["run_id"] != latest_run_id)
@@ -141,6 +240,9 @@ def _serialize_project(project_id: str) -> dict[str, Any]:
             }
         )
 
+    cond_obj = json.loads(proj["current_conditions_json"]) if proj["current_conditions_json"] else {}
+    s_meta = cond_obj.get("sample_meta") or {}
+
     proj_dict = {
         "id": proj["id"],
         "sample_name": proj["sample_name"],
@@ -149,9 +251,13 @@ def _serialize_project(project_id: str) -> dict[str, Any]:
         "expected_formula": proj["expected_formula"],
         "is_same_sample": bool(proj["is_same_sample"]),
         "is_sample_demo": bool(proj["is_sample_demo"]),
-        "current_conditions": json.loads(proj["current_conditions_json"]),
+        "sample_code": s_meta.get("sample_code") or proj["id"],
+        "processing_method": s_meta.get("processing_method") or "",
+        "experiment_memo": s_meta.get("experiment_memo") or "",
+        "instrument_counts": inst_counts,
+        "current_conditions": cond_obj,
         "files": files_out,
-        "runs": [dict(r) for r in runs],
+        "runs": [_extract_run_summary(r) for r in runs],
         "latest_run_id": latest_run_id,
         "has_outdated_ai": has_outdated_ai,
         "edit_history": [dict(h) for h in history],
@@ -339,10 +445,20 @@ def list_projects() -> list[dict[str, Any]]:
         out = []
         for p in rows:
             run_cnt = conn.execute("SELECT COUNT(*) AS c FROM analysis_runs WHERE project_id = ?", (p["id"],)).fetchone()["c"]
+            try:
+                ext_run_cnt = conn.execute("SELECT COUNT(*) AS c FROM sample_analysis_results WHERE sample_id = ?", (p["id"],)).fetchone()["c"]
+            except Exception:
+                ext_run_cnt = 0
             file_roles = [
                 fr["file_role"]
                 for fr in conn.execute("SELECT file_role FROM project_files WHERE project_id = ?", (p["id"],)).fetchall()
             ]
+            inst_counts = _compute_instrument_counts(conn, p["id"])
+            for k, v in inst_counts.items():
+                if v > 0 and k.lower() not in file_roles:
+                    file_roles.append(k.lower())
+            cond_obj = json.loads(p["current_conditions_json"]) if p["current_conditions_json"] else {}
+            s_meta = cond_obj.get("sample_meta") or {}
             p_raw = {
                 "id": p["id"],
                 "sample_name": p["sample_name"],
@@ -351,7 +467,7 @@ def list_projects() -> list[dict[str, Any]]:
                 "expected_elements": json.loads(p["expected_elements_json"]),
                 "is_same_sample": bool(p["is_same_sample"]),
                 "is_sample_demo": bool(p["is_sample_demo"]),
-                "current_conditions": json.loads(p["current_conditions_json"]),
+                "current_conditions": cond_obj,
             }
             out.append(
                 {
@@ -362,9 +478,13 @@ def list_projects() -> list[dict[str, Any]]:
                     "expected_elements": json.loads(p["expected_elements_json"]),
                     "is_same_sample": bool(p["is_same_sample"]),
                     "is_sample_demo": bool(p["is_sample_demo"]),
+                    "sample_code": s_meta.get("sample_code") or p["id"],
+                    "processing_method": s_meta.get("processing_method") or "",
+                    "experiment_memo": s_meta.get("experiment_memo") or "",
+                    "instrument_counts": inst_counts,
                     "experiment_meta": infer_or_extract_experiment_meta(p_raw),
                     "file_roles": sorted(set(file_roles)),
-                    "run_count": run_cnt,
+                    "run_count": int(run_cnt) + int(ext_run_cnt),
                     "updated_at": p["updated_at"],
                 }
             )
@@ -378,6 +498,11 @@ def create_project(req: CreateProjectRequest) -> dict[str, Any]:
     default_cond: dict[str, Any] = {
         "xrd_params": XRDParams().model_dump(),
         "sem_params": SEMParams().model_dump(),
+        "sample_meta": {
+            "sample_code": (req.sample_code or "").strip() or pid,
+            "processing_method": (req.processing_method or "").strip(),
+            "experiment_memo": (req.experiment_memo or "").strip(),
+        },
     }
     if req.experiment_meta is not None:
         default_cond["experiment_meta"] = req.experiment_meta.model_dump()
@@ -428,8 +553,16 @@ def update_project(project_id: str, req: UpdateProjectRequest) -> dict[str, Any]
         )
         formula = req.expected_formula.strip() if req.expected_formula is not None else proj["expected_formula"]
         is_same = int(req.is_same_sample) if req.is_same_sample is not None else proj["is_same_sample"]
-        existing_cond = json.loads(proj["current_conditions_json"])
+        existing_cond = json.loads(proj["current_conditions_json"]) if proj["current_conditions_json"] else {}
         cond = req.current_conditions if req.current_conditions is not None else existing_cond
+        s_meta = dict(cond.get("sample_meta") or existing_cond.get("sample_meta") or {})
+        if req.sample_code is not None:
+            s_meta["sample_code"] = req.sample_code.strip()
+        if req.processing_method is not None:
+            s_meta["processing_method"] = req.processing_method.strip()
+        if req.experiment_memo is not None:
+            s_meta["experiment_memo"] = req.experiment_memo.strip()
+        cond["sample_meta"] = s_meta
         if req.experiment_meta is not None:
             cond["experiment_meta"] = req.experiment_meta.model_dump()
         now = utc_now_iso()
@@ -585,6 +718,7 @@ def _attach_file_bytes_to_project(
             xp.two_theta_min = inspection["two_theta_min"]
             xp.two_theta_max = inspection["two_theta_max"]
             cond["xrd_params"] = xp.model_dump()
+            cond.setdefault("xrd_params_by_file", {})[fid] = xp.model_dump()
         elif file_role == "sem":
             sp = SEMParams(**cond.get("sem_params", {}))
             sp.roi = ROIRect(**inspection["suggested_roi"])
@@ -597,6 +731,7 @@ def _attach_file_bytes_to_project(
                 sp.scale_length_px = sb["length_px"]
             sp.scale_confirmed = False  # User must confirm real length & unit!
             cond["sem_params"] = sp.model_dump()
+            cond.setdefault("sem_params_by_file", {})[fid] = sp.model_dump()
 
         conn.execute(
             "UPDATE projects SET current_conditions_json = ?, updated_at = ? WHERE id = ?",
@@ -900,9 +1035,17 @@ def start_analysis_run(project_id: str, req: RunAnalysisRequest) -> dict[str, An
                 now,
             ),
         )
+        existing_cond = json.loads(proj["current_conditions_json"]) if proj["current_conditions_json"] else {}
+        existing_cond["xrd_params"] = req.xrd_params.model_dump()
+        existing_cond["sem_params"] = req.sem_params.model_dump()
+        if req.selected_xrd_file_id:
+            existing_cond.setdefault("xrd_params_by_file", {})[req.selected_xrd_file_id] = req.xrd_params.model_dump()
+        if req.selected_sem_file_id:
+            existing_cond.setdefault("sem_params_by_file", {})[req.selected_sem_file_id] = req.sem_params.model_dump()
+
         conn.execute(
             "UPDATE projects SET current_conditions_json = ?, updated_at = ? WHERE id = ?",
-            (json.dumps({"xrd_params": req.xrd_params.model_dump(), "sem_params": req.sem_params.model_dump()}, ensure_ascii=False), now, project_id),
+            (json.dumps(existing_cond, ensure_ascii=False), now, project_id),
         )
         record_history(
             conn,
@@ -914,6 +1057,264 @@ def start_analysis_run(project_id: str, req: RunAnalysisRequest) -> dict[str, An
 
     submit_analysis_job(run_id, project_id, params_dump)
     return {"run_id": run_id, "run_number": run_number, "status": "queued"}
+
+
+@app.get("/api/projects/{project_id}/xrd-series")
+def get_project_xrd_series(project_id: str) -> dict[str, Any]:
+    """Return parsed 2θ & intensity curves and latest run summaries for all XRD files attached to a sample."""
+    with get_conn() as conn:
+        proj = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if not proj:
+            raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다.")
+        xrd_files = conn.execute(
+            "SELECT * FROM project_files WHERE project_id = ? AND file_role = 'xrd' ORDER BY created_at ASC",
+            (project_id,),
+        ).fetchall()
+        runs = conn.execute(
+            "SELECT id, run_number, status, params_json, xrd_result_json, created_at FROM analysis_runs WHERE project_id = ? AND status = 'completed' ORDER BY run_number DESC",
+            (project_id,),
+        ).fetchall()
+
+    cond_obj = json.loads(proj["current_conditions_json"]) if proj["current_conditions_json"] else {}
+    xrd_params_by_file = cond_obj.get("xrd_params_by_file") or {}
+    default_xp = cond_obj.get("xrd_params") or {}
+
+    # Map file_id -> latest completed xrd_result
+    run_by_file_id: dict[str, tuple[str, dict[str, Any]]] = {}
+    fallback_latest_run: tuple[str, dict[str, Any]] | None = None
+    for r in runs:
+        if not r["xrd_result_json"]:
+            continue
+        try:
+            xres = json.loads(r["xrd_result_json"])
+            p_obj = json.loads(r["params_json"]) if r["params_json"] else {}
+            fid = xres.get("source_file_id") or p_obj.get("selected_xrd_file_id")
+            if fallback_latest_run is None:
+                fallback_latest_run = (r["id"], xres)
+            if fid and fid not in run_by_file_id:
+                run_by_file_id[fid] = (r["id"], xres)
+        except Exception:
+            pass
+
+    series_out: list[dict[str, Any]] = []
+    for idx, xf in enumerate(xrd_files):
+        fid = xf["id"]
+        full_p = PROJECTS_STORAGE_DIR / project_id / xf["stored_relpath"]
+        two_theta_arr: list[float] = []
+        intensity_raw: list[float] = []
+        intensity_norm: list[float] = []
+
+        matched = run_by_file_id.get(fid)
+        if matched is None and len(xrd_files) == 1 and fallback_latest_run is not None:
+            matched = fallback_latest_run
+
+        if matched is not None:
+            run_id_found, xres = matched
+            curve = xres.get("curve") or {}
+            two_theta_arr = [float(v) for v in (curve.get("two_theta") or [])]
+            intensity_raw = [float(v) for v in (curve.get("raw_intensity") or curve.get("corrected_intensity") or [])]
+        else:
+            run_id_found = None
+            xres = None
+
+        if (not two_theta_arr or not intensity_raw) and full_p.exists():
+            try:
+                f_params = xrd_params_by_file.get(fid) or default_xp
+                parsed = inspect_and_parse_xrd(
+                    full_p.read_bytes(),
+                    col_two_theta=f_params.get("col_two_theta"),
+                    col_intensity=f_params.get("col_intensity"),
+                )
+                two_theta_arr = [round(float(v), 4) for v in parsed["two_theta"].tolist()]
+                intensity_raw = [round(float(v), 2) for v in parsed["intensity"].tolist()]
+            except Exception:
+                pass
+
+        if intensity_raw:
+            min_i = min(intensity_raw)
+            max_i = max(intensity_raw)
+            span = max(max_i - min_i, 1e-9)
+            intensity_norm = [round(((v - min_i) / span) * 100.0, 3) for v in intensity_raw]
+
+        cands = ((xres or {}).get("phase_matching") or {}).get("candidates") or []
+        top_cand = cands[0] if cands else {}
+        peaks_list = (xres or {}).get("peaks") or []
+
+        series_out.append(
+            {
+                "file_id": fid,
+                "filename": xf["original_filename"],
+                "created_at": xf["created_at"],
+                "order_index": idx,
+                "two_theta": two_theta_arr,
+                "intensity_raw": intensity_raw,
+                "intensity_norm": intensity_norm,
+                "latest_run_id": run_id_found,
+                "peak_count": len(peaks_list),
+                "peaks": peaks_list[:20],
+                "primary_phase": top_cand.get("name"),
+                "primary_formula": top_cand.get("formula"),
+                "scherrer_mean_nm": ((xres or {}).get("scherrer") or {}).get("mean_nm"),
+            }
+        )
+
+    return {
+        "project_id": project_id,
+        "sample_name": proj["sample_name"],
+        "series": series_out,
+    }
+
+
+@app.get("/api/projects/{project_id}/records")
+def list_sample_instrument_records(
+    project_id: str,
+    instrument: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """List Sample -> Measurement -> Analysis Result records for a sample across instruments."""
+    with get_conn() as conn:
+        proj = conn.execute("SELECT id, sample_name FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if not proj:
+            raise HTTPException(status_code=404, detail="시료를 찾을 수 없습니다.")
+
+        if instrument:
+            inst_norm = instrument.strip().lower().replace("-", "")
+            m_rows = conn.execute(
+                "SELECT * FROM sample_measurements WHERE sample_id = ? AND LOWER(REPLACE(instrument_type, '-', '')) = ? ORDER BY created_at DESC",
+                (project_id, inst_norm),
+            ).fetchall()
+        else:
+            m_rows = conn.execute(
+                "SELECT * FROM sample_measurements WHERE sample_id = ? ORDER BY created_at DESC",
+                (project_id,),
+            ).fetchall()
+
+        a_rows = conn.execute(
+            "SELECT * FROM sample_analysis_results WHERE sample_id = ? ORDER BY created_at DESC",
+            (project_id,),
+        ).fetchall()
+
+    analyses_by_meas: dict[str, list[dict[str, Any]]] = {}
+    for ar in a_rows:
+        mid = ar["measurement_id"] or ""
+        analyses_by_meas.setdefault(mid, []).append(
+            {
+                "id": ar["id"],
+                "sample_id": ar["sample_id"],
+                "measurement_id": ar["measurement_id"],
+                "analysis_type": ar["analysis_type"],
+                "parameters": json.loads(ar["parameters_json"]) if ar["parameters_json"] else {},
+                "results": json.loads(ar["results_json"]) if ar["results_json"] else {},
+                "summary_text": ar["summary_text"],
+                "created_at": ar["created_at"],
+            }
+        )
+
+    records_out: list[dict[str, Any]] = []
+    for mr in m_rows:
+        mid = mr["id"]
+        records_out.append(
+            {
+                "id": mid,
+                "sample_id": mr["sample_id"],
+                "instrument_type": mr["instrument_type"],
+                "original_filename": mr["original_filename"],
+                "metadata": json.loads(mr["metadata_json"]) if mr["metadata_json"] else {},
+                "raw_payload": json.loads(mr["raw_payload_json"]) if mr["raw_payload_json"] else {},
+                "created_at": mr["created_at"],
+                "analyses": analyses_by_meas.get(mid, []),
+            }
+        )
+
+    return {
+        "sample_id": project_id,
+        "sample_name": proj["sample_name"],
+        "records": records_out,
+    }
+
+
+@app.post("/api/projects/{project_id}/records")
+def create_sample_instrument_record(project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Save a Measurement and its Analysis Result under a registered Sample."""
+    inst_type = str(payload.get("instrument_type") or "unknown").strip().lower()
+    orig_filename = str(payload.get("original_filename") or f"{inst_type}_data.csv").strip()
+    meta_obj = payload.get("metadata") or {}
+    raw_obj = payload.get("raw_payload") or {}
+    params_obj = payload.get("parameters") or {}
+    results_obj = payload.get("results") or {}
+    summary_text = str(payload.get("summary_text") or "").strip()
+
+    now = utc_now_iso()
+    mid = new_id("meas")
+    aid = new_id("ares")
+
+    with get_conn() as conn:
+        proj = conn.execute("SELECT id, sample_name FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if not proj:
+            raise HTTPException(status_code=404, detail="시료를 찾을 수 없습니다.")
+
+        conn.execute(
+            """
+            INSERT INTO sample_measurements (
+                id, sample_id, instrument_type, original_filename, metadata_json, raw_payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                mid,
+                project_id,
+                inst_type,
+                orig_filename,
+                json.dumps(meta_obj, ensure_ascii=False),
+                json.dumps(raw_obj, ensure_ascii=False),
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO sample_analysis_results (
+                id, sample_id, measurement_id, analysis_type, parameters_json, results_json, summary_text, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                aid,
+                project_id,
+                mid,
+                inst_type,
+                json.dumps(params_obj, ensure_ascii=False),
+                json.dumps(results_obj, ensure_ascii=False),
+                summary_text,
+                now,
+            ),
+        )
+        conn.execute("UPDATE projects SET updated_at = ? WHERE id = ?", (now, project_id))
+        record_history(
+            conn,
+            project_id,
+            f"record_{inst_type}",
+            f"{inst_type.upper()} 측정 및 분석 결과 저장: {orig_filename}",
+            {"measurement_id": mid, "analysis_id": aid},
+        )
+
+    return {
+        "measurement_id": mid,
+        "analysis_id": aid,
+        "sample_id": project_id,
+        "instrument_type": inst_type,
+        "original_filename": orig_filename,
+        "created_at": now,
+    }
+
+
+@app.delete("/api/projects/{project_id}/records/{measurement_id}")
+def delete_sample_instrument_record(project_id: str, measurement_id: str) -> dict[str, Any]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM sample_measurements WHERE id = ? AND sample_id = ?",
+            (measurement_id, project_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="삭제할 측정 기록을 찾을 수 없습니다.")
+        conn.execute("DELETE FROM sample_measurements WHERE id = ?", (measurement_id,))
+    return {"deleted": True, "measurement_id": measurement_id}
 
 
 @app.get("/api/runs/{run_id}")
@@ -1833,6 +2234,14 @@ def get_run_ai_summary(run_id: str, request: Request, format: str = Query("markd
     if format == "json":
         return ctx
     return PlainTextResponse(content=_build_ai_markdown_summary(ctx, base_url))
+
+
+# Spectro & Thermal Analysis (FT-IR, DSC, TGA) Endpoints
+try:
+    from .spectro.router import router as spectro_router
+except ImportError:
+    from app.spectro.router import router as spectro_router
+app.include_router(spectro_router)
 
 
 # Serve sample files

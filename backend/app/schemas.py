@@ -121,6 +121,9 @@ class CreateProjectRequest(BaseModel):
     expected_elements: list[str] = Field(default_factory=list)
     expected_formula: str = Field(default="", max_length=80)
     is_same_sample: bool = False
+    sample_code: str = Field(default="", max_length=80)
+    processing_method: str = Field(default="", max_length=300)
+    experiment_memo: str = Field(default="", max_length=1000)
     experiment_meta: ExperimentMeta | None = None
 
 
@@ -130,6 +133,9 @@ class UpdateProjectRequest(BaseModel):
     expected_elements: list[str] | None = None
     expected_formula: str | None = None
     is_same_sample: bool | None = None
+    sample_code: str | None = Field(default=None, max_length=80)
+    processing_method: str | None = Field(default=None, max_length=300)
+    experiment_memo: str | None = Field(default=None, max_length=1000)
     current_conditions: dict[str, Any] | None = None
     experiment_meta: ExperimentMeta | None = None
     change_summary: str | None = None

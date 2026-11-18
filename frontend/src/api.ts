@@ -5,8 +5,10 @@ import type {
   ProjectDetail,
   ProjectListItem,
   RunDetail,
+  SampleInstrumentRecord,
   SEMParams,
   XRDParams,
+  XrdSeriesCurveItem,
 } from "./types";
 
 export const DEFAULT_XRD_PARAMS: XRDParams = {
@@ -102,6 +104,9 @@ export const api = {
     expected_elements: string[];
     expected_formula: string;
     is_same_sample: boolean;
+    sample_code?: string;
+    processing_method?: string;
+    experiment_memo?: string;
   }) =>
     fetch("/api/projects", {
       method: "POST",
@@ -149,6 +154,46 @@ export const api = {
     }).then((r) => handleJson<ProjectDetail>(r));
   },
 
+  deleteProjectFile: (projectId: string, fileId: string) =>
+    fetch(`/api/projects/${projectId}/files/${fileId}`, {
+      method: "DELETE",
+    }).then((r) => handleJson<ProjectDetail>(r)),
+
+  getProjectXrdSeries: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/xrd-series`).then((r) =>
+      handleJson<{ project_id: string; sample_name: string; series: XrdSeriesCurveItem[] }>(r)
+    ),
+
+  listSampleRecords: (projectId: string, instrument?: string) => {
+    const qs = instrument ? `?instrument=${encodeURIComponent(instrument)}` : "";
+    return fetch(`/api/projects/${projectId}/records${qs}`).then((r) =>
+      handleJson<{ sample_id: string; sample_name: string; records: SampleInstrumentRecord[] }>(r)
+    );
+  },
+
+  saveSampleRecord: (
+    projectId: string,
+    payload: {
+      instrument_type: string;
+      original_filename: string;
+      metadata?: Record<string, any>;
+      raw_payload?: Record<string, any>;
+      parameters?: Record<string, any>;
+      results?: Record<string, any>;
+      summary_text?: string;
+    }
+  ) =>
+    fetch(`/api/projects/${projectId}/records`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then((r) => handleJson<any>(r)),
+
+  deleteSampleRecord: (projectId: string, measurementId: string) =>
+    fetch(`/api/projects/${projectId}/records/${measurementId}`, {
+      method: "DELETE",
+    }).then((r) => handleJson<{ deleted: boolean; measurement_id: string }>(r)),
+
   getAiScope: (projectId: string) =>
     fetch(`/api/projects/${projectId}/ai-scope`).then((r) => handleJson<any>(r)),
 
@@ -158,6 +203,8 @@ export const api = {
       xrd_params: XRDParams;
       sem_params: SEMParams;
       run_ai_interpretation: boolean;
+      selected_xrd_file_id?: string | null;
+      selected_sem_file_id?: string | null;
     }
   ) =>
     fetch(`/api/projects/${projectId}/runs`, {
@@ -423,4 +470,101 @@ export const api = {
     `/api/v1/comparison/sessions/${encodeURIComponent(sessionId)}/export/result.json`,
   comparisonPdfUrl: (sessionId: string) =>
     `/api/v1/comparison/sessions/${encodeURIComponent(sessionId)}/export/report.pdf`,
+
+  // Spectro & Thermal Analysis (FT-IR, DSC, TGA) Endpoints
+  getSpectroSample: (instrument: "ftir" | "dsc" | "tga") =>
+    fetch(`/api/spectro/samples/${instrument}`).then((r) => handleJson<any>(r)),
+
+  parseSpectroFile: async (instrument: "ftir" | "dsc" | "tga", file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch(`/api/spectro/${instrument}/parse`, { method: "POST", body: fd });
+    return handleJson<any>(r);
+  },
+
+  analyzeSpectro: async (
+    instrument: "ftir" | "dsc" | "tga",
+    payload: {
+      filename?: string;
+      columns: any[];
+      column_data: number[][];
+      conditions: Record<string, any>;
+      notes?: string;
+    }
+  ) => {
+    const r = await fetch(`/api/spectro/${instrument}/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instrument, ...payload }),
+    });
+    return handleJson<any>(r);
+  },
+
+  interpretSpectroAi: async (
+    instrument: "ftir" | "dsc" | "tga",
+    payload: {
+      analysis_result: any;
+      user_notes?: string;
+    }
+  ) => {
+    const r = await fetch(`/api/spectro/${instrument}/ai`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instrument, ...payload }),
+    });
+    return handleJson<any>(r);
+  },
+
+  downloadSpectroPdf: (instrument: string, payload: any, filename?: string) =>
+    downloadFile(
+      `/api/spectro/${instrument}/download/pdf`,
+      filename || `matlens_${instrument}_report.pdf`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  downloadSpectroChart: (instrument: string, payload: any, filename?: string) =>
+    downloadFile(
+      `/api/spectro/${instrument}/download/chart`,
+      filename || `matlens_${instrument}_chart.png`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  downloadSpectroCsv: (instrument: string, payload: any, filename?: string) =>
+    downloadFile(
+      `/api/spectro/${instrument}/download/csv`,
+      filename || `matlens_${instrument}_processed.csv`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  downloadSpectroJson: (instrument: string, payload: any, filename?: string) =>
+    downloadFile(
+      `/api/spectro/${instrument}/download/json`,
+      filename || `matlens_${instrument}_analysis.json`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  compareSpectro: async (instrument: string, items: any[]) => {
+    const r = await fetch(`/api/spectro/${instrument}/compare`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instrument, items }),
+    });
+    return handleJson<any>(r);
+  },
 };

@@ -89,6 +89,30 @@ export interface ProjectFileInfo {
   created_at: string;
 }
 
+export interface RunXrdSummary {
+  source_file_id?: string | null;
+  source_filename?: string | null;
+  peak_count?: number;
+  primary_phase?: string | null;
+  primary_formula?: string | null;
+  scherrer_mean_nm?: number | null;
+}
+
+export interface RunSemSummary {
+  source_file_id?: string | null;
+  source_filename?: string | null;
+  fov_label?: string | null;
+  mode?: "particle" | "grain";
+  unit?: string;
+  scale_confirmed?: boolean;
+  count?: number | null;
+  mean_size?: number | null;
+  d10?: number | null;
+  d50?: number | null;
+  d90?: number | null;
+  porosity_pct?: number | null;
+}
+
 export interface RunBrief {
   id: string;
   run_number: number;
@@ -98,6 +122,10 @@ export interface RunBrief {
   error_message: string | null;
   created_at: string;
   completed_at: string | null;
+  xrd_file_id?: string | null;
+  sem_file_id?: string | null;
+  xrd_summary?: RunXrdSummary | null;
+  sem_summary?: RunSemSummary | null;
 }
 
 export interface ProjectDetail {
@@ -108,10 +136,21 @@ export interface ProjectDetail {
   expected_formula: string;
   is_same_sample: boolean;
   is_sample_demo: boolean;
+  sample_code?: string;
+  processing_method?: string;
+  experiment_memo?: string;
+  instrument_counts?: Record<string, number>;
   experiment_meta?: ExperimentMeta;
   current_conditions: {
     xrd_params?: Partial<XRDParams>;
     sem_params?: Partial<SEMParams>;
+    xrd_params_by_file?: Record<string, Partial<XRDParams>>;
+    sem_params_by_file?: Record<string, Partial<SEMParams>>;
+    sample_meta?: {
+      sample_code?: string;
+      processing_method?: string;
+      experiment_memo?: string;
+    };
   };
   files: ProjectFileInfo[];
   runs: RunBrief[];
@@ -130,10 +169,50 @@ export interface ProjectListItem {
   expected_elements: string[];
   is_same_sample: boolean;
   is_sample_demo: boolean;
+  sample_code?: string;
+  processing_method?: string;
+  experiment_memo?: string;
+  instrument_counts?: Record<string, number>;
   experiment_meta?: ExperimentMeta;
   file_roles: string[];
   run_count: number;
   updated_at: string;
+}
+
+export interface XrdSeriesCurveItem {
+  file_id: string;
+  filename: string;
+  created_at: string;
+  order_index: number;
+  two_theta: number[];
+  intensity_raw: number[];
+  intensity_norm: number[];
+  latest_run_id: string | null;
+  peak_count: number;
+  peaks: any[];
+  primary_phase: string | null;
+  primary_formula: string | null;
+  scherrer_mean_nm: number | null;
+}
+
+export interface SampleInstrumentRecord {
+  id: string;
+  sample_id: string;
+  instrument_type: string;
+  original_filename: string;
+  metadata: Record<string, any>;
+  raw_payload: Record<string, any>;
+  created_at: string;
+  analyses: Array<{
+    id: string;
+    sample_id: string;
+    measurement_id: string;
+    analysis_type: string;
+    parameters: Record<string, any>;
+    results: Record<string, any>;
+    summary_text: string;
+    created_at: string;
+  }>;
 }
 
 export interface RunDetail {

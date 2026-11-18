@@ -117,6 +117,27 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS sample_measurements (
+                id TEXT PRIMARY KEY,
+                sample_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                instrument_type TEXT NOT NULL,
+                original_filename TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                raw_payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS sample_analysis_results (
+                id TEXT PRIMARY KEY,
+                sample_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                measurement_id TEXT REFERENCES sample_measurements(id) ON DELETE CASCADE,
+                analysis_type TEXT NOT NULL,
+                parameters_json TEXT NOT NULL DEFAULT '{}',
+                results_json TEXT NOT NULL DEFAULT '{}',
+                summary_text TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
             """
         )
 
