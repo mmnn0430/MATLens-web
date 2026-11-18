@@ -22,6 +22,7 @@ import type {
   XRDParams,
 } from "./types";
 import { LandingSetup } from "./components/LandingSetup";
+import { HomeDashboard } from "./components/HomeDashboard";
 import { XrdView } from "./components/XrdView";
 import { SemView } from "./components/SemView";
 import { UtmView } from "./components/UtmView";
@@ -30,13 +31,18 @@ import { LfaView } from "./components/LfaView";
 import { IntegratedAnalysisView } from "./components/IntegratedAnalysisView";
 import { Button, SourceTag } from "./components/ui/primitives";
 
-export type ServiceMode = "matlens" | "utm" | "hall" | "lfa" | "integrated";
+export type ServiceMode = "home" | "matlens" | "utm" | "hall" | "lfa" | "integrated";
 
 function readUrlState() {
   const sp = new URLSearchParams(window.location.search);
+  const rawMode = sp.get("mode") as ServiceMode | null;
+  const projectId = sp.get("project");
+  const sessionId = sp.get("session");
+  const resolvedMode: ServiceMode =
+    rawMode || (projectId ? "matlens" : sessionId ? "integrated" : "home");
   return {
-    mode: (sp.get("mode") as ServiceMode) || "matlens",
-    projectId: sp.get("project"),
+    mode: resolvedMode,
+    projectId,
     runId: sp.get("run"),
     view: (sp.get("view") as "setup" | "results") || null,
     tab: (sp.get("tab") as "xrd" | "sem") || "xrd",
@@ -51,7 +57,10 @@ function writeUrlState(next: {
   tab?: "xrd" | "sem";
 }) {
   const sp = new URLSearchParams();
-  if (next.mode && next.mode !== "matlens") sp.set("mode", next.mode);
+  const effectiveMode = next.mode || (next.projectId ? "matlens" : "home");
+  if (effectiveMode !== "home") {
+    sp.set("mode", effectiveMode);
+  }
   if (next.projectId) sp.set("project", next.projectId);
   if (next.runId) sp.set("run", next.runId);
   if (next.view) sp.set("view", next.view);
@@ -61,9 +70,12 @@ function writeUrlState(next: {
 }
 
 export default function App() {
-  const [serviceMode, setServiceMode] = useState<ServiceMode>("matlens");
+  const [serviceMode, setServiceMode] = useState<ServiceMode>(() => readUrlState().mode);
+  const [visitedModes, setVisitedModes] = useState<Record<string, boolean>>({});
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState<boolean>(true);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
   const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null);
   const [activeRun, setActiveRun] = useState<RunDetail | null>(null);
 
@@ -99,11 +111,15 @@ export default function App() {
   }, []);
 
   const refreshProjectsList = useCallback(async () => {
+    setProjectsLoading(true);
+    setProjectsError(null);
     try {
       const list = await api.listProjects();
       setProjects(list);
-    } catch {
-      // ignore initial list error
+    } catch (err: any) {
+      setProjectsError(err?.message || "저장된 분석 데이터를 불러오지 못했습니다.");
+    } finally {
+      setProjectsLoading(false);
     }
   }, []);
 
@@ -112,10 +128,12 @@ export default function App() {
       projectId: string,
       preferredRunId?: string | null,
       preferredView?: "setup" | "results",
-      isInitialUrlLoad?: boolean
+      isInitialUrlLoad?: boolean,
+      preferredTab?: "xrd" | "sem"
     ) => {
       setIsBusy(true);
       setErrorMsg(null);
+      setServiceMode("matlens");
       try {
         const proj = await api.getProject(projectId);
         setActiveProject(proj);
@@ -127,19 +145,25 @@ export default function App() {
           setActiveRun(r);
           const nextView = preferredView || (r.status === "completed" || r.status === "running" ? "results" : "setup");
           setViewMode(nextView);
-          const defaultTab = r.xrd_result ? "xrd" : "sem";
+          const defaultTab =
+            preferredTab && ((preferredTab === "xrd" && r.xrd_result) || (preferredTab === "sem" && r.sem_result))
+              ? preferredTab
+              : r.xrd_result
+              ? "xrd"
+              : "sem";
           setActiveTab(defaultTab);
-          writeUrlState({ projectId: proj.id, runId: r.id, view: nextView, tab: defaultTab });
+          writeUrlState({ mode: "matlens", projectId: proj.id, runId: r.id, view: nextView, tab: defaultTab });
         } else {
           setActiveRun(null);
           setViewMode("setup");
-          writeUrlState({ projectId: proj.id, view: "setup" });
+          writeUrlState({ mode: "matlens", projectId: proj.id, view: "setup" });
         }
       } catch (err: any) {
         if (isInitialUrlLoad) {
           // URL 링크로 들어왔으나 프로젝트가 존재하지 않거나 만료된 경우
           // 경고 에러 배너를 띄우지 않고 깔끔하게 URL을 정리하고 기본 홈으로 진입
-          writeUrlState({});
+          writeUrlState({ mode: "home" });
+          setServiceMode("home");
           setActiveProject(null);
           setActiveRun(null);
           setErrorMsg(null);
@@ -152,6 +176,13 @@ export default function App() {
     },
     [hydrateParamsFromProject]
   );
+
+  // Track visited analysis modes so in-memory analysis state is preserved when returning to Home
+  useEffect(() => {
+    if (serviceMode === "utm" || serviceMode === "hall" || serviceMode === "lfa") {
+      setVisitedModes((prev) => (prev[serviceMode] ? prev : { ...prev, [serviceMode]: true }));
+    }
+  }, [serviceMode]);
 
   // Initial load + restore URL state on browser refresh
   useEffect(() => {
@@ -172,7 +203,9 @@ export default function App() {
       setServiceMode(urlState.mode);
     } else if (urlState.projectId) {
       if (urlState.tab) setActiveTab(urlState.tab);
-      openProject(urlState.projectId, urlState.runId, urlState.view || undefined, true);
+      openProject(urlState.projectId, urlState.runId, urlState.view || undefined, true, urlState.tab);
+    } else {
+      setServiceMode("matlens");
     }
   }, [openProject, refreshProjectsList]);
 
@@ -341,6 +374,7 @@ export default function App() {
   const handleLoadSample = async (preset: "tio2_powder" | "sintered_grains" | "desktop_nbfesb") => {
     setIsBusy(true);
     setErrorMsg(null);
+    setServiceMode("matlens");
     try {
       const proj = await api.createSampleDemo(preset);
       setActiveProject(proj);
@@ -363,7 +397,7 @@ export default function App() {
       if (preset === "desktop_nbfesb") {
         // Open in setup view first so user can inspect the uploaded Desktop files & conditions before or while running
         setViewMode("setup");
-        writeUrlState({ projectId: proj.id, view: "setup" });
+        writeUrlState({ mode: "matlens", projectId: proj.id, view: "setup" });
         setIsBusy(false);
         return;
       }
@@ -377,7 +411,7 @@ export default function App() {
       const r = await api.getRun(started.run_id);
       setActiveRun(r);
       setViewMode("results");
-      writeUrlState({ projectId: proj.id, runId: r.id, view: "results", tab: "xrd" });
+      writeUrlState({ mode: "matlens", projectId: proj.id, runId: r.id, view: "results", tab: "xrd" });
     } catch (err: any) {
       setErrorMsg(err?.message || "샘플 프로젝트 생성에 실패했습니다.");
       setIsBusy(false);
@@ -548,7 +582,7 @@ export default function App() {
       if (activeProject?.id === projectId) {
         setActiveProject(null);
         setActiveRun(null);
-        writeUrlState({});
+        writeUrlState({ mode: serviceMode === "home" ? "home" : "matlens" });
       }
       refreshProjectsList();
     } catch (err: any) {
@@ -585,15 +619,16 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
-                setActiveProject(null);
-                setActiveRun(null);
+                setServiceMode("home");
                 setErrorMsg(null);
-                writeUrlState({});
+                writeUrlState({ mode: "home" });
                 refreshProjectsList();
               }}
-              className="flex items-center gap-2 font-bold text-[19px] tracking-tight text-[#191F28] cursor-pointer shrink-0 min-h-[44px]"
+              aria-label="MatLens 홈 화면으로 이동"
+              title="MatLens 홈 화면으로 이동"
+              className="group flex items-center gap-2 font-bold text-[19px] tracking-tight text-[#191F28] hover:text-[#3182F6] cursor-pointer shrink-0 min-h-[44px] px-2 -ml-2 rounded-[12px] hover:bg-[#F2F4F6]/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#3182F6] transition-all"
             >
-              <span className="w-8 h-8 rounded-[10px] bg-[#3182F6] text-white flex items-center justify-center">
+              <span className="w-8 h-8 rounded-[10px] bg-[#3182F6] group-hover:bg-[#1B64DA] text-white flex items-center justify-center transition-colors">
                 <Layers className="w-4 h-4" />
               </span>
               <span>MatLens</span>
@@ -690,7 +725,7 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {serviceMode === "matlens" && (
+            {(serviceMode === "matlens" || serviceMode === "home") && (
               <Button
                 type="button"
                 size="sm"
@@ -717,6 +752,7 @@ export default function App() {
                     onClick={() => {
                       setViewMode("results");
                       writeUrlState({
+                        mode: "matlens",
                         projectId: activeProject.id,
                         runId: activeRun.id,
                         view: "results",
@@ -736,6 +772,7 @@ export default function App() {
                     onClick={() => {
                       setViewMode("setup");
                       writeUrlState({
+                        mode: "matlens",
                         projectId: activeProject.id,
                         runId: activeRun?.id,
                         view: "setup",
@@ -755,7 +792,7 @@ export default function App() {
                     setActiveProject(null);
                     setActiveRun(null);
                     setErrorMsg(null);
-                    writeUrlState({});
+                    writeUrlState({ mode: "matlens" });
                     refreshProjectsList();
                   }}
                 >
@@ -873,28 +910,76 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-8 py-6 sm:py-8">
-        {serviceMode === "utm" ? (
-          <UtmView
-            onNavigateToIntegrated={() => {
-              setServiceMode("integrated");
-              writeUrlState({ mode: "integrated" });
+        {(visitedModes.utm || serviceMode === "utm") && (
+          <div className={serviceMode === "utm" ? "block" : "hidden"}>
+            <UtmView
+              onNavigateToIntegrated={() => {
+                setServiceMode("integrated");
+                writeUrlState({ mode: "integrated" });
+              }}
+            />
+          </div>
+        )}
+
+        {(visitedModes.hall || serviceMode === "hall") && (
+          <div className={serviceMode === "hall" ? "block" : "hidden"}>
+            <HallView
+              onNavigateToIntegrated={() => {
+                setServiceMode("integrated");
+                writeUrlState({ mode: "integrated" });
+              }}
+            />
+          </div>
+        )}
+
+        {(visitedModes.lfa || serviceMode === "lfa") && (
+          <div className={serviceMode === "lfa" ? "block" : "hidden"}>
+            <LfaView
+              onNavigateToIntegrated={() => {
+                setServiceMode("integrated");
+                writeUrlState({ mode: "integrated" });
+              }}
+            />
+          </div>
+        )}
+
+        {serviceMode === "home" ? (
+          <HomeDashboard
+            health={health}
+            projects={projects}
+            projectsLoading={projectsLoading}
+            projectsError={projectsError}
+            isBusy={isBusy || isJobRunning}
+            onRefreshProjects={refreshProjectsList}
+            onOpenProject={(pid, preferredTab, preferredView) =>
+              openProject(pid, null, preferredView, false, preferredTab)
+            }
+            onDeleteProject={handleDeleteProject}
+            onNavigateMode={(nextMode, resetProject) => {
+              if (resetProject) {
+                setActiveProject(null);
+                setActiveRun(null);
+                setViewMode("setup");
+                setServiceMode(nextMode);
+                writeUrlState({ mode: nextMode });
+                return;
+              }
+              setServiceMode(nextMode);
+              if (nextMode === "matlens") {
+                writeUrlState({
+                  mode: "matlens",
+                  projectId: activeProject?.id,
+                  runId: activeRun?.id,
+                  view: viewMode,
+                  tab: activeTab,
+                });
+              } else {
+                writeUrlState({ mode: nextMode });
+              }
             }}
+            onLoadSample={handleLoadSample}
           />
-        ) : serviceMode === "hall" ? (
-          <HallView
-            onNavigateToIntegrated={() => {
-              setServiceMode("integrated");
-              writeUrlState({ mode: "integrated" });
-            }}
-          />
-        ) : serviceMode === "lfa" ? (
-          <LfaView
-            onNavigateToIntegrated={() => {
-              setServiceMode("integrated");
-              writeUrlState({ mode: "integrated" });
-            }}
-          />
-        ) : serviceMode === "integrated" ? (
+        ) : serviceMode === "utm" || serviceMode === "hall" || serviceMode === "lfa" ? null : serviceMode === "integrated" ? (
           <IntegratedAnalysisView activeProject={activeProject} activeRun={activeRun} />
         ) : viewMode === "setup" || !activeProject ? (
           <LandingSetup
@@ -964,6 +1049,7 @@ export default function App() {
                   const t = val as "xrd" | "sem";
                   setActiveTab(t);
                   writeUrlState({
+                    mode: "matlens",
                     projectId: activeProject.id,
                     runId: activeRun.id,
                     view: "results",
