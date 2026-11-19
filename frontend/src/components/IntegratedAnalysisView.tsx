@@ -6,11 +6,8 @@ import {
   ArrowRight,
   BookOpen,
   CheckCircle2,
-  ChevronDown,
-  ChevronUp,
   Download,
   ExternalLink,
-  Eye,
   FileSpreadsheet,
   Flame,
   HelpCircle,
@@ -32,7 +29,6 @@ import type {
   IntegratedReportSnapshot,
   ProjectDetail,
   RunDetail,
-  SavedAnalysisCounts,
   SavedAnalysisItem,
   ScopedAnalysisSelection,
   SemVisualizationItem,
@@ -242,7 +238,6 @@ export function IntegratedAnalysisView({
   // ---------------------------------------------------------------------------
   // Data State
   // ---------------------------------------------------------------------------
-  const [savedCounts, setSavedCounts] = useState<SavedAnalysisCounts>({});
   const [isCountsLoading, setIsCountsLoading] = useState<boolean>(true);
   const [allSavedItems, setAllSavedItems] = useState<SavedAnalysisItem[]>([]);
   const [isItemsLoading, setIsItemsLoading] = useState<boolean>(false);
@@ -283,8 +278,6 @@ export function IntegratedAnalysisView({
     setIsCountsLoading(true);
     setIsItemsLoading(true);
     try {
-      const countsResp = await api.getSavedAnalysesCounts();
-      setSavedCounts(countsResp.counts || {});
 
       const itemsResp = await api.getSavedAnalyses({ latest_only: false });
       setAllSavedItems(itemsResp.items || []);

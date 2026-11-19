@@ -652,7 +652,7 @@ export interface ScopedIntegratedReportRequest {
   run_ai?: boolean;
 }
 
-export interface LiteratureReference {
+export interface IntegratedReportReference {
   id?: string;
   doi?: string;
   title: string;
@@ -726,7 +726,7 @@ export interface AiScientificReport {
     hypothesis_validation_plan: string;
     suggested_next_experiments: string[];
   };
-  references?: LiteratureReference[];
+  references?: IntegratedReportReference[];
   analysis_summary: string;
   data_quality_assessment: string;
   physical_mechanisms?: string[];
@@ -747,7 +747,7 @@ export interface IntegratedReportSnapshot {
   analysis_result: IntegratedAnalysisResult & { report_title?: string };
   multi_curves?: Record<string, any[]>;
   sem_visualizations?: SemVisualizationItem[];
-  references?: LiteratureReference[];
+  references?: IntegratedReportReference[];
   ai_interpretation?: AiScientificReport;
   created_at: string;
 }
