@@ -239,9 +239,11 @@ def test_scenario_e_selective_inclusion_in_integrated_report():
     data = resp.json()
 
     assert data["selected_instruments"] == ["UTM"]
-    assert len(data["selected_items"]) == 2
+    # Requirement 4: 동일 시료 + 동일 분석기기 기준 가장 마지막 Run(run_number=2)만 통합 리포트에 반영
+    assert len(data["selected_items"]) == 1
     item_ids = [item["id"] for item in data["selected_items"]]
-    assert item_ids == ["utm_item_1", "utm_item_2"]
+    assert item_ids == ["utm_item_2"]
+    assert "utm_item_1" not in item_ids
     assert "utm_item_3" not in item_ids
 
 
