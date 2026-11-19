@@ -1,13 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertCircle,
   AlertTriangle,
   BookOpen,
   CheckCircle2,
+  Download,
+  Eye,
+  EyeOff,
+  FileSpreadsheet,
+  FileText,
   Flame,
   FolderOpen,
   Info,
+  Layers,
+  RefreshCw,
   Share2,
   Sparkles,
   Trash2,
@@ -15,6 +22,7 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import { PlotlyChart } from "./PlotlyChart";
+import { Button, Card } from "./ui/primitives";
 import type {
   GroundingData,
   LfaAnalysisResult,
@@ -23,6 +31,17 @@ import type {
   SampleInstrumentRecord,
   ScientificInterpretation,
 } from "../types";
+
+export interface LfaBatchItem {
+  id: string;
+  name: string;
+  rawText: string;
+  file: File;
+  status: "waiting" | "analyzing" | "completed" | "error";
+  result?: LfaAnalysisResult;
+  error?: string;
+  measurementId?: string;
+}
 
 interface LfaViewProps {
   activeSample?: ProjectDetail | ProjectListItem | null;
@@ -43,6 +62,11 @@ export function LfaView({ activeSample, onRecordSaved, onNavigateToIntegrated }:
   const [sampleId, setSampleId] = useState<string>("Pyroceram-Standard");
   const [materialName, setMaterialName] = useState<string>("Pyroceram 9606");
   const [tempC, setTempC] = useState<number>(25);
+
+  // Multi-file batch state & overlay toggles
+  const [batchFiles, setBatchFiles] = useState<LfaBatchItem[]>([]);
+  const [hiddenCurves, setHiddenCurves] = useState<Record<string, boolean>>({});
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
 
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -94,18 +118,192 @@ export function LfaView({ activeSample, onRecordSaved, onNavigateToIntegrated }:
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadedFilename(file.name);
-    setActiveMeasurementId(null);
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const content = evt.target?.result as string;
-      setRawText(content);
-      setErrorMsg(null);
-    };
-    reader.readAsText(file);
+    const files = Array.from(e.target.files || []);
+    if (files.length === 1) {
+      const file = files[0];
+      setUploadedFilename(file.name);
+      setActiveMeasurementId(null);
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const content = evt.target?.result as string;
+        setRawText(content);
+        setErrorMsg(null);
+      };
+      reader.readAsText(file);
+    } else if (files.length > 1) {
+      handleMultipleFiles(files);
+    }
   };
+
+  const handleMultipleFiles = async (files: File[]) => {
+    if (!files || files.length === 0) return;
+    setErrorMsg(null);
+    setIsBatchProcessing(true);
+
+    const effSampleId = activeSample?.sample_code || sampleId;
+    const effMaterialName = activeSample?.expected_formula || materialName;
+
+    const readAsText = (f: File): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (evt) => resolve((evt.target?.result as string) || "");
+        reader.onerror = reject;
+        reader.readAsText(f);
+      });
+    };
+
+    const newItems: LfaBatchItem[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      try {
+        const text = await readAsText(f);
+        newItems.push({
+          id: `lfa_batch_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`,
+          name: f.name,
+          rawText: text,
+          file: f,
+          status: "waiting",
+        });
+      } catch {
+        // ignore read error
+      }
+    }
+
+    setBatchFiles((prev) => [...prev, ...newItems]);
+
+    // Process sequentially for clean failure isolation
+    for (const item of newItems) {
+      setBatchFiles((prev) =>
+        prev.map((b) => (b.id === item.id ? { ...b, status: "analyzing" } : b))
+      );
+      try {
+        const resp = await api.runLfaAnalysis({
+          raw_text: item.rawText,
+          thickness_mm: thicknessMm,
+          density_g_cm3: densityGCm3 === "" ? null : Number(densityGCm3),
+          specific_heat_J_gK: specificHeatJGK === "" ? null : Number(specificHeatJGK),
+          is_literature_density: isLitDensity,
+          is_literature_cp: isLitCp,
+          sample_id: effSampleId,
+          material_name: effMaterialName,
+          measurement_temperature_C: tempC,
+          include_ai_interpretation: false,
+        });
+
+        let measurementId: string | undefined;
+        if (activeSample?.id) {
+          const calc = resp.calculated_properties;
+          const sumText = `α ${calc.thermal_diffusivity_mm2_s.toFixed(3)} mm²/s · κ ${
+            calc.thermal_conductivity_W_mK != null ? calc.thermal_conductivity_W_mK.toFixed(2) : "-"
+          } W/m·K (t₁/₂=${calc.half_rise_time_s.toFixed(3)}s)`;
+
+          const saved = await api.saveSampleRecord(activeSample.id, {
+            instrument_type: "lfa",
+            original_filename: item.name,
+            metadata: { temperature_C: tempC, thickness_mm: thicknessMm },
+            raw_payload: {
+              raw_text: item.rawText,
+              thickness_mm: thicknessMm,
+              density_g_cm3: densityGCm3,
+              specific_heat_J_gK: specificHeatJGK,
+              is_literature_density: isLitDensity,
+              is_literature_cp: isLitCp,
+              measurement_temperature_C: tempC,
+              material_name: effMaterialName,
+              sample_id: effSampleId,
+            },
+            parameters: { thicknessMm, densityGCm3, specificHeatJGK, tempC },
+            results: resp,
+            summary_text: sumText,
+          });
+          measurementId = saved?.measurement_id;
+        }
+
+        setBatchFiles((prev) =>
+          prev.map((b) =>
+            b.id === item.id
+              ? { ...b, status: "completed", result: resp.calculated_properties, measurementId }
+              : b
+          )
+        );
+
+        // Populate detail view if none active
+        setResult((curr) => {
+          if (!curr) {
+            setUploadedFilename(item.name);
+            setRawText(item.rawText);
+            setGrounding(resp.grounding);
+            setAiReport(resp.ai_interpretation);
+            if (measurementId) setActiveMeasurementId(measurementId);
+            return resp.calculated_properties;
+          }
+          return curr;
+        });
+      } catch (err: any) {
+        setBatchFiles((prev) =>
+          prev.map((b) =>
+            b.id === item.id
+              ? { ...b, status: "error", error: err?.message || "분석 실패" }
+              : b
+          )
+        );
+      }
+    }
+
+    setIsBatchProcessing(false);
+    refreshSampleRecords();
+    onRecordSaved?.();
+  };
+
+  const handleSelectBatchItem = (item: LfaBatchItem) => {
+    if (item.result) {
+      setUploadedFilename(item.name);
+      setRawText(item.rawText);
+      setResult(item.result);
+      if (item.measurementId) setActiveMeasurementId(item.measurementId);
+    }
+  };
+
+  const handleRemoveBatchItem = (id: string) => {
+    setBatchFiles((prev) => prev.filter((b) => b.id !== id));
+  };
+
+  const handleDownloadComparisonCsv = () => {
+    const completed = batchFiles.filter((b) => b.status === "completed" && b.result);
+    if (completed.length === 0) return;
+    const headers = [
+      "파일명",
+      "열확산도_alpha(mm^2/s)",
+      "열전도도_kappa(W/m*K)",
+      "반상승시간_t1_2(s)",
+      "최대온도상승_DeltaT(°C)",
+      "열손실률(%)",
+    ];
+    const rows = completed.map((b) => [
+      b.name,
+      b.result?.thermal_diffusivity_mm2_s?.toFixed(4) ?? "",
+      b.result?.thermal_conductivity_W_mK?.toFixed(2) ?? "",
+      b.result?.half_rise_time_s?.toFixed(4) ?? "",
+      b.result?.max_temp_rise_C?.toFixed(2) ?? "",
+      b.result?.heat_loss_ratio ? `${(b.result.heat_loss_ratio * 100).toFixed(1)}%` : "0%",
+    ]);
+    const content = [
+      headers.join(","),
+      ...rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")),
+    ].join("\n");
+    const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `lfa_comparison_${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const completedBatchItems = useMemo(
+    () => batchFiles.filter((b) => b.status === "completed" && b.result),
+    [batchFiles]
+  );
 
   const handleLoadRecord = (rec: SampleInstrumentRecord) => {
     setActiveMeasurementId(rec.id);
@@ -308,7 +506,7 @@ export function LfaView({ activeSample, onRecordSaved, onNavigateToIntegrated }:
             과도 온도 응답 곡선(Thermogram)에서 Parker 반상승 시간(t₁/₂)을 구하여 열확산도(α) 및 열전도도(κ = α·ρ·Cp)를 계산하고 학술 근거와 대조합니다.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={loadBenchmarkSample}
@@ -317,6 +515,17 @@ export function LfaView({ activeSample, onRecordSaved, onNavigateToIntegrated }:
             <Activity className="w-4 h-4 text-[#D97706]" />
             벤치마크 Pyroceram 샘플 로드
           </button>
+          <label className="px-4 py-2 rounded-[12px] bg-[#D97706] hover:bg-[#B45309] text-white text-[13px] font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm">
+            <Upload className="w-4 h-4" />
+            <span>{isBatchProcessing ? "파일 분석 중..." : "LFA 파일 복수 업로드"}</span>
+            <input
+              type="file"
+              multiple
+              accept=".csv,.txt,.dat"
+              onChange={handleFileUpload}
+              className="hidden"
+            />
+          </label>
         </div>
       </div>
 
@@ -384,6 +593,269 @@ export function LfaView({ activeSample, onRecordSaved, onNavigateToIntegrated }:
             닫기
           </button>
         </div>
+      )}
+
+      {/* Batch Files Queue / Active List */}
+      {batchFiles.length > 0 && (
+        <Card className="p-5 space-y-4 bg-white border border-[#E5E8EB]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F2F4F6] pb-3">
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet className="w-4 h-4 text-[#D97706]" />
+              <span className="font-bold text-[14px] text-[#191F28]">
+                업로드된 LFA 측정 파일 목록 ({batchFiles.length}개)
+              </span>
+              <span className="text-[11px] text-[#6B7684]">
+                완료 {completedBatchItems.length}개 · 분석 중 {batchFiles.filter((b) => b.status === "analyzing").length}개
+              </span>
+            </div>
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[9px] text-[12px] font-bold text-[#D97706] bg-[#FEF3C7] hover:bg-[#FDE68A] border border-[#FCD34D] transition-colors cursor-pointer">
+              <Upload className="w-3.5 h-3.5" />
+              <span>추가 파일 업로드</span>
+              <input
+                type="file"
+                multiple
+                accept=".csv,.txt,.dat"
+                className="hidden"
+                onChange={handleFileUpload}
+              />
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {batchFiles.map((b) => {
+              const isSelected = uploadedFilename === b.name;
+              return (
+                <div
+                  key={b.id}
+                  className={`p-3.5 rounded-[12px] border transition-all flex flex-col justify-between gap-2.5 ${
+                    isSelected
+                      ? "bg-[#FEF3C7]/60 border-[#D97706] shadow-xs"
+                      : "bg-[#F8FAFC] border-[#E5E8EB] hover:border-[#CBD5E1]"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[13px] font-bold text-[#191F28] truncate" title={b.name}>
+                        {b.name}
+                      </div>
+                      <div className="text-[11px] text-[#6B7684] mt-0.5">
+                        크기: {(b.file.size / 1024).toFixed(1)} KB
+                      </div>
+                    </div>
+                    {b.status === "completed" && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#DCFCE7] text-[#15803D] shrink-0">
+                        분석 완료
+                      </span>
+                    )}
+                    {b.status === "analyzing" && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#FEF3C7] text-[#B45309] flex items-center gap-1 shrink-0">
+                        <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                        분석 중
+                      </span>
+                    )}
+                    {b.status === "waiting" && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#F1F5F9] text-[#64748B] shrink-0">
+                        대기
+                      </span>
+                    )}
+                    {b.status === "error" && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#FEE2E2] text-[#DC2626] shrink-0">
+                        오류
+                      </span>
+                    )}
+                  </div>
+
+                  {b.status === "completed" && b.result && (
+                    <div className="text-[11px] font-mono text-[#334155] bg-white p-2 rounded-[8px] border border-[#E2E8F0] space-y-0.5">
+                      <div>열확산도 α: <strong className="text-[#D97706]">{b.result.thermal_diffusivity_mm2_s?.toFixed(3)} mm²/s</strong></div>
+                      <div>열전도도 κ: <strong className="text-[#1D4ED8]">{b.result.thermal_conductivity_W_mK != null ? `${b.result.thermal_conductivity_W_mK.toFixed(2)} W/m·K` : "-"}</strong></div>
+                      <div>t₁/₂: <strong className="text-[#059669]">{b.result.half_rise_time_s?.toFixed(4)} s</strong></div>
+                    </div>
+                  )}
+
+                  {b.status === "error" && (
+                    <div className="text-[11px] text-[#DC2626] bg-[#FEF2F2] p-2 rounded border border-[#FECACA]">
+                      {b.error || "분석 오류 발생"}
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-1 border-t border-[#E5E8EB]">
+                    {b.status === "completed" ? (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectBatchItem(b)}
+                        className={`text-[11px] font-bold cursor-pointer ${
+                          isSelected ? "text-[#D97706]" : "text-[#64748B] hover:text-[#191F28]"
+                        }`}
+                      >
+                        {isSelected ? "현재 상세 검토 중" : "상세 검토 선택"}
+                      </button>
+                    ) : (
+                      <span className="text-[11px] text-[#94A3B8]">—</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveBatchItem(b.id)}
+                      className="text-[#94A3B8] hover:text-[#DC2626] text-[11px] cursor-pointer"
+                      title="목록에서 제거"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* Multi-Curve Overlay & Comparison View (when 2 or more files completed) */}
+      {completedBatchItems.length >= 2 && (
+        <Card className="p-5 space-y-5 border-2 border-[#FDE68A] bg-gradient-to-br from-white to-[#FFFBEB]">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#FCD34D] pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Layers className="w-5 h-5 text-[#D97706]" />
+                <h3 className="text-[17px] font-bold text-[#191F28]">
+                  다중 LFA 과도 온도 곡선 중첩 및 열물성 정량 비교 ({completedBatchItems.length}개 파일)
+                </h3>
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#FEF3C7] text-[#B45309] border border-[#FDE68A]">
+                  Parker 모델 수치 계산 완료
+                </span>
+              </div>
+              <p className="text-[12px] text-[#6B7684] mt-1">
+                각 측정 파일의 시간에 따른 후면 온도 상승 응답 곡선(Thermogram)을 중첩 비교하고 열확산도(α)와 열전도도(κ)를 대조합니다.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleDownloadComparisonCsv}
+                className="text-[12px] font-bold text-[#B45309] border-[#FCD34D] hover:bg-[#FEF3C7]"
+              >
+                <Download className="w-3.5 h-3.5 mr-1 text-[#D97706]" />
+                비교표 CSV 내보내기
+              </Button>
+            </div>
+          </div>
+
+          {/* Visibility toggle pills */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[12px] font-semibold text-[#6B7684]">표시 곡선 선택:</span>
+            {completedBatchItems.map((b, idx) => {
+              const colors = ["#D97706", "#2563EB", "#10B981", "#EF4444", "#8B5CF6", "#06B6D4", "#EC4899", "#84CC16"];
+              const color = colors[idx % colors.length];
+              const isHidden = hiddenCurves[b.id];
+              return (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() => setHiddenCurves((prev) => ({ ...prev, [b.id]: !prev[b.id] }))}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold border transition-all cursor-pointer ${
+                    isHidden
+                      ? "bg-[#F8FAFC] border-[#E2E8F0] text-[#94A3B8] line-through"
+                      : "bg-white border-[#CBD5E1] text-[#191F28] shadow-xs"
+                  }`}
+                >
+                  <span
+                    className="w-2.5 h-2.5 rounded-full"
+                    style={{ backgroundColor: isHidden ? "#CBD5E1" : color }}
+                  />
+                  <span>{b.name}</span>
+                  {isHidden ? <EyeOff className="w-3 h-3 text-[#94A3B8]" /> : <Eye className="w-3 h-3 text-[#64748B]" />}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Plotly Multi-Curve Overlay */}
+          <div className="w-full bg-white rounded-[14px] border border-[#E5E8EB] p-3 shadow-xs">
+            <PlotlyChart
+              data={completedBatchItems
+                .filter((b) => !hiddenCurves[b.id])
+                .map((b, idx) => {
+                  const colors = ["#D97706", "#2563EB", "#10B981", "#EF4444", "#8B5CF6", "#06B6D4", "#EC4899", "#84CC16"];
+                  const color = colors[idx % colors.length];
+                  return {
+                    x: b.result?.time_series_s || [],
+                    y: b.result?.temp_series_C || [],
+                    type: "scatter",
+                    mode: "lines",
+                    name: b.name,
+                    line: { color, width: 2.2 },
+                    hovertemplate: `<b>${b.name}</b><br>시간: %{x:.3f} s<br>온도: %{y:.2f} °C<extra></extra>`,
+                  };
+                })}
+              layout={{
+                title: { text: "다중 LFA 과도 온도 곡선 중첩 (Transient Thermogram Overlay)", font: { size: 14 } },
+                xaxis: { title: "시간 Time t (s)", gridcolor: "#F1F5F9" },
+                yaxis: { title: "후면 온도 Rear Temp T (°C)", gridcolor: "#F1F5F9" },
+                hovermode: "closest",
+                legend: { orientation: "h", y: -0.2 },
+                margin: { l: 60, r: 20, t: 40, b: 60 },
+                autosize: true,
+              }}
+              style={{ width: "100%", height: "400px" }}
+            />
+          </div>
+
+          {/* Quantitative Comparison Table */}
+          <div className="overflow-x-auto rounded-[12px] border border-[#E5E8EB] bg-white">
+            <table className="w-full text-left text-[12px] border-collapse">
+              <thead>
+                <tr className="bg-[#F8FAFC] border-b border-[#E5E8EB] text-[#475569] font-bold">
+                  <th className="py-2.5 px-3">파일명</th>
+                  <th className="py-2.5 px-3">열확산도 α (mm²/s)</th>
+                  <th className="py-2.5 px-3">열전도도 κ (W/m·K)</th>
+                  <th className="py-2.5 px-3">반상승 시간 t₁/₂ (s)</th>
+                  <th className="py-2.5 px-3">최대온도상승 ΔT (°C)</th>
+                  <th className="py-2.5 px-3">열손실률</th>
+                  <th className="py-2.5 px-3">작업</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#F1F5F9]">
+                {completedBatchItems.map((b) => (
+                  <tr key={b.id} className="hover:bg-[#F8FAFC]">
+                    <td className="py-2.5 px-3 font-semibold text-[#191F28] flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-[#D97706]" />
+                      <span>{b.name}</span>
+                    </td>
+                    <td className="py-2.5 px-3 font-mono font-bold text-[#D97706]">
+                      {b.result?.thermal_diffusivity_mm2_s ? `${b.result.thermal_diffusivity_mm2_s.toFixed(3)} mm²/s` : "-"}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono font-bold text-[#1D4ED8]">
+                      {b.result?.thermal_conductivity_W_mK != null ? `${b.result.thermal_conductivity_W_mK.toFixed(2)} W/m·K` : "Cp/밀도 필요"}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-[#059669]">
+                      {b.result?.half_rise_time_s ? `${b.result.half_rise_time_s.toFixed(4)} s` : "-"}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-[#DC2626]">
+                      {b.result?.max_temp_rise_C ? `${b.result.max_temp_rise_C.toFixed(2)} °C` : "-"}
+                    </td>
+                    <td className="py-2.5 px-3 text-[11px] text-[#475569]">
+                      {b.result?.heat_loss_ratio ? (
+                        <span className="text-[#D97706] font-semibold">{(b.result.heat_loss_ratio * 100).toFixed(1)}%</span>
+                      ) : (
+                        <span className="text-[#059669]">단열(Parker)</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-3">
+                      <button
+                        type="button"
+                        onClick={() => handleSelectBatchItem(b)}
+                        className="px-2 py-1 rounded-[6px] text-[11px] font-bold bg-[#FEF3C7] text-[#B45309] hover:bg-[#FDE68A] cursor-pointer"
+                      >
+                        상세 보기
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
 
       {/* Input Configuration & File Area */}
@@ -496,8 +968,8 @@ export function LfaView({ activeSample, onRecordSaved, onNavigateToIntegrated }:
             <div className="flex justify-between items-center mb-1">
               <label className="text-[12px] font-semibold text-[#4E5968]">원시 과도 온도(Time vs Rear Temp) 데이터</label>
               <label className="text-[12px] text-[#D97706] font-semibold cursor-pointer hover:underline">
-                파일 찾기 (CSV/TXT)
-                <input type="file" accept=".csv,.txt,.dat" onChange={handleFileUpload} className="hidden" />
+                파일 찾기 (CSV/TXT · 복수 선택 가능)
+                <input type="file" multiple accept=".csv,.txt,.dat" onChange={handleFileUpload} className="hidden" />
               </label>
             </div>
             <textarea

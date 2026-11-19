@@ -33,18 +33,8 @@ import {
 } from "./components/SampleManagement";
 import { Button, SourceTag } from "./components/ui/primitives";
 
-export type ServiceMode =
-  | "home"
-  | "xrd"
-  | "sem"
-  | "matlens"
-  | "utm"
-  | "hall"
-  | "lfa"
-  | "ftir"
-  | "dsc"
-  | "tga"
-  | "integrated";
+import type { ServiceMode } from "./types";
+export type { ServiceMode };
 
 function normalizeMode(rawMode: string | null, tab: string | null, projectId: string | null, sessionId: string | null): ServiceMode {
   if (rawMode === "spectro") return "ftir";
@@ -1140,7 +1130,11 @@ export default function App() {
             onNavigateToIntegrated={() => switchMode("integrated")}
           />
         ) : serviceMode === "integrated" ? (
-          <IntegratedAnalysisView activeProject={activeProject} activeRun={activeRun} />
+          <IntegratedAnalysisView
+            activeProject={activeProject}
+            activeRun={activeRun}
+            onNavigateMode={switchMode}
+          />
         ) : null}
       </main>
 

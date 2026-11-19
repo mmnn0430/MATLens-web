@@ -138,6 +138,21 @@ def init_db() -> None:
                 summary_text TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS integrated_reports (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                sample_id TEXT,
+                material_name TEXT NOT NULL,
+                instruments_json TEXT NOT NULL DEFAULT '[]',
+                selected_items_json TEXT NOT NULL DEFAULT '[]',
+                calculated_properties_json TEXT NOT NULL DEFAULT '{}',
+                report_data_json TEXT NOT NULL DEFAULT '{}',
+                ai_interpretation_json TEXT,
+                ai_model TEXT NOT NULL DEFAULT '',
+                prompt_version TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
             """
         )
 

@@ -585,3 +585,93 @@ export interface ExperimentMeta {
   missing_fields?: string[];
 }
 
+export type ServiceMode =
+  | "home"
+  | "xrd"
+  | "sem"
+  | "matlens"
+  | "utm"
+  | "hall"
+  | "lfa"
+  | "ftir"
+  | "dsc"
+  | "tga"
+  | "integrated";
+
+export interface SavedAnalysisItem {
+  id: string;
+  instrument: string;
+  sample_id: string;
+  sample_name: string;
+  sample_code?: string;
+  file_id?: string;
+  measurement_id?: string;
+  analysis_id?: string;
+  run_id?: string;
+  original_filename: string;
+  run_number?: number;
+  version_label: string;
+  status: "completed" | "needs_analysis" | "error";
+  created_at: string;
+  summary_text: string;
+  results_preview: Record<string, any>;
+  parameters: Record<string, any>;
+  raw_curve_available?: boolean;
+}
+
+export interface SavedAnalysisCounts {
+  XRD?: number;
+  SEM?: number;
+  UTM?: number;
+  Hall?: number;
+  LFA?: number;
+  "FT-IR"?: number;
+  DSC?: number;
+  TGA?: number;
+  [instrument: string]: number | undefined;
+}
+
+export interface ScopedAnalysisSelection {
+  id: string;
+  instrument: string;
+  sample_id: string;
+  sample_name?: string;
+  file_id?: string;
+  measurement_id?: string;
+  analysis_id?: string;
+  run_id?: string;
+  original_filename?: string;
+  run_number?: number;
+}
+
+export interface ScopedIntegratedReportRequest {
+  title?: string;
+  selected_items: ScopedAnalysisSelection[];
+  temperature_K?: number;
+  user_notes?: string;
+  run_ai?: boolean;
+}
+
+export interface IntegratedReportSnapshot {
+  report_id: string;
+  title: string;
+  sample_id: string;
+  material_name: string;
+  is_same_sample: boolean;
+  sample_ids: string[];
+  selected_instruments: string[];
+  selected_items: ScopedAnalysisSelection[];
+  analysis_result: IntegratedAnalysisResult & { report_title?: string };
+  multi_curves?: Record<string, any[]>;
+  ai_interpretation?: {
+    analysis_summary: string;
+    data_quality_assessment: string;
+    physical_mechanisms: string[];
+    scientific_cautions: string;
+    recommended_experiments: string[];
+    ai_engine?: string;
+  };
+  created_at: string;
+}
+
+

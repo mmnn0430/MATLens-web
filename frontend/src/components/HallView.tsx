@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   BookOpen,
   CheckCircle2,
   Clock,
+  Download,
+  Eye,
+  EyeOff,
+  FileSpreadsheet,
+  FileText,
   Info,
+  Layers,
+  RefreshCw,
   Share2,
   Sparkles,
   Trash2,
@@ -13,6 +20,7 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import { PlotlyChart } from "./PlotlyChart";
+import { Button, Card } from "./ui/primitives";
 import type {
   GroundingData,
   HallAnalysisResult,
@@ -21,6 +29,17 @@ import type {
   SampleInstrumentRecord,
   ScientificInterpretation,
 } from "../types";
+
+export interface HallBatchItem {
+  id: string;
+  name: string;
+  rawText: string;
+  file: File;
+  status: "waiting" | "analyzing" | "completed" | "error";
+  result?: HallAnalysisResult;
+  error?: string;
+  measurementId?: string;
+}
 
 interface HallViewProps {
   activeSample?: ProjectDetail | ProjectListItem | null;
@@ -41,6 +60,11 @@ export function HallView({ activeSample, onRecordSaved, onNavigateToIntegrated }
   const [dopant, setDopant] = useState<string>("Phosphorus (P)");
   const [tempC, setTempC] = useState<number>(25);
   const [doAntisym, setDoAntisym] = useState<boolean>(true);
+
+  // Multi-file batch state & overlay toggles
+  const [batchFiles, setBatchFiles] = useState<HallBatchItem[]>([]);
+  const [hiddenCurves, setHiddenCurves] = useState<Record<string, boolean>>({});
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
 
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -108,18 +132,192 @@ MagneticField_T,TransverseVoltage_mV
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setActiveMeasurementId(null);
-    setUploadedFilename(file.name);
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const content = evt.target?.result as string;
-      setRawText(content);
-      setErrorMsg(null);
-    };
-    reader.readAsText(file);
+    const files = Array.from(e.target.files || []);
+    if (files.length === 1) {
+      const file = files[0];
+      setActiveMeasurementId(null);
+      setUploadedFilename(file.name);
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const content = evt.target?.result as string;
+        setRawText(content);
+        setErrorMsg(null);
+      };
+      reader.readAsText(file);
+    } else if (files.length > 1) {
+      handleMultipleFiles(files);
+    }
   };
+
+  const handleMultipleFiles = async (files: File[]) => {
+    if (!files || files.length === 0) return;
+    setErrorMsg(null);
+    setIsBatchProcessing(true);
+
+    const effSampleId = activeSample ? activeSample.sample_code || activeSample.id : sampleId;
+    const effMaterialName = activeSample?.expected_formula || materialName;
+
+    const readAsText = (f: File): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (evt) => resolve((evt.target?.result as string) || "");
+        reader.onerror = reject;
+        reader.readAsText(f);
+      });
+    };
+
+    const newItems: HallBatchItem[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      try {
+        const text = await readAsText(f);
+        newItems.push({
+          id: `hall_batch_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`,
+          name: f.name,
+          rawText: text,
+          file: f,
+          status: "waiting",
+        });
+      } catch {
+        // ignore read error
+      }
+    }
+
+    setBatchFiles((prev) => [...prev, ...newItems]);
+
+    // Process sequentially for clean failure isolation
+    for (const item of newItems) {
+      setBatchFiles((prev) =>
+        prev.map((b) => (b.id === item.id ? { ...b, status: "analyzing" } : b))
+      );
+      try {
+        const resp = await api.runHallAnalysis({
+          raw_text: item.rawText,
+          thickness_um: thicknessUm,
+          current_mA: currentMa,
+          sheet_resistance_Ohm_sq: sheetResist,
+          sample_id: effSampleId,
+          material_name: effMaterialName,
+          dopant: dopant,
+          measurement_temperature_C: tempC,
+          do_antisymmetrization: doAntisym,
+          include_ai_interpretation: false,
+        });
+
+        let measurementId: string | undefined;
+        if (activeSample?.id) {
+          const calc = resp.calculated_properties;
+          const sumText = `${calc.carrier_type?.split(" ")[0] || ""} · σ ${
+            calc.electrical_conductivity_S_cm != null ? calc.electrical_conductivity_S_cm.toFixed(1) : "-"
+          } S/cm · μ ${calc.hall_mobility_cm2_Vs != null ? calc.hall_mobility_cm2_Vs.toFixed(1) : "-"} cm²/Vs`;
+
+          const saved = await api.saveSampleRecord(activeSample.id, {
+            instrument_type: "hall",
+            original_filename: item.name,
+            metadata: { temperature_C: tempC, dopant },
+            raw_payload: {
+              raw_text: item.rawText,
+              thickness_um: thicknessUm,
+              current_mA: currentMa,
+              sheet_resistance_Ohm_sq: sheetResist,
+              dopant,
+              tempC,
+              doAntisym,
+            },
+            parameters: { thicknessUm, currentMa, sheetResist, tempC, doAntisym },
+            results: resp,
+            summary_text: sumText,
+          });
+          measurementId = saved?.measurement_id;
+        }
+
+        setBatchFiles((prev) =>
+          prev.map((b) =>
+            b.id === item.id
+              ? { ...b, status: "completed", result: resp.calculated_properties, measurementId }
+              : b
+          )
+        );
+
+        // Populate detail view if none active
+        setResult((curr) => {
+          if (!curr) {
+            setUploadedFilename(item.name);
+            setRawText(item.rawText);
+            setGrounding(resp.grounding);
+            setAiReport(resp.ai_interpretation);
+            if (measurementId) setActiveMeasurementId(measurementId);
+            return resp.calculated_properties;
+          }
+          return curr;
+        });
+      } catch (err: any) {
+        setBatchFiles((prev) =>
+          prev.map((b) =>
+            b.id === item.id
+              ? { ...b, status: "error", error: err?.message || "분석 실패" }
+              : b
+          )
+        );
+      }
+    }
+
+    setIsBatchProcessing(false);
+    refreshSampleRecords();
+    onRecordSaved?.();
+  };
+
+  const handleSelectBatchItem = (item: HallBatchItem) => {
+    if (item.result) {
+      setUploadedFilename(item.name);
+      setRawText(item.rawText);
+      setResult(item.result);
+      if (item.measurementId) setActiveMeasurementId(item.measurementId);
+    }
+  };
+
+  const handleRemoveBatchItem = (id: string) => {
+    setBatchFiles((prev) => prev.filter((b) => b.id !== id));
+  };
+
+  const handleDownloadComparisonCsv = () => {
+    const completed = batchFiles.filter((b) => b.status === "completed" && b.result);
+    if (completed.length === 0) return;
+    const headers = [
+      "파일명",
+      "캐리어타입",
+      "캐리어농도_n(cm^-3)",
+      "홀이동도_mu(cm^2/Vs)",
+      "전기전도도_sigma(S/cm)",
+      "비저항_rho(Ohm*cm)",
+      "결정계수_R^2",
+    ];
+    const rows = completed.map((b) => [
+      b.name,
+      b.result?.carrier_type ?? "",
+      b.result?.carrier_concentration_cm3?.toExponential(3) ?? "",
+      b.result?.hall_mobility_cm2_Vs?.toFixed(2) ?? "",
+      b.result?.electrical_conductivity_S_cm?.toFixed(2) ?? "",
+      b.result?.resistivity_Ohm_cm?.toExponential(3) ?? "",
+      b.result?.r_squared?.toFixed(5) ?? "",
+    ]);
+    const content = [
+      headers.join(","),
+      ...rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")),
+    ].join("\n");
+    const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `hall_comparison_${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const completedBatchItems = useMemo(
+    () => batchFiles.filter((b) => b.status === "completed" && b.result),
+    [batchFiles]
+  );
 
   const executeAnalysis = async () => {
     if (!rawText.trim()) {
@@ -278,7 +476,7 @@ MagneticField_T,TransverseVoltage_mV
             원시 전압 데이터로부터 ±B 비대칭화(Antisymmetrization), 캐리어 농도(n_H), 이동도(µ_H), 전도도(σ)를 결정론적으로 계산하고 학술 논문 근거를 검증합니다.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={loadBenchmarkSample}
@@ -287,6 +485,17 @@ MagneticField_T,TransverseVoltage_mV
             <Activity className="w-4 h-4 text-[#3182F6]" />
             벤치마크 n-Si 샘플 로드
           </button>
+          <label className="px-4 py-2 rounded-[12px] bg-[#3182F6] hover:bg-[#2563EB] text-white text-[13px] font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm">
+            <Upload className="w-4 h-4" />
+            <span>{isBatchProcessing ? "파일 분석 중..." : "Hall 파일 복수 업로드"}</span>
+            <input
+              type="file"
+              multiple
+              accept=".csv,.txt,.dat"
+              onChange={handleFileUpload}
+              className="hidden"
+            />
+          </label>
         </div>
       </div>
 
@@ -366,6 +575,276 @@ MagneticField_T,TransverseVoltage_mV
             닫기
           </button>
         </div>
+      )}
+
+      {/* Batch Files Queue / Active List */}
+      {batchFiles.length > 0 && (
+        <Card className="p-5 space-y-4 bg-white border border-[#E5E8EB]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F2F4F6] pb-3">
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet className="w-4 h-4 text-[#3182F6]" />
+              <span className="font-bold text-[14px] text-[#191F28]">
+                업로드된 Hall 측정 파일 목록 ({batchFiles.length}개)
+              </span>
+              <span className="text-[11px] text-[#6B7684]">
+                완료 {completedBatchItems.length}개 · 분석 중 {batchFiles.filter((b) => b.status === "analyzing").length}개
+              </span>
+            </div>
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[9px] text-[12px] font-bold text-[#3182F6] bg-[#EFF6FF] hover:bg-[#DBEAFE] border border-[#BFDBFE] transition-colors cursor-pointer">
+              <Upload className="w-3.5 h-3.5" />
+              <span>추가 파일 업로드</span>
+              <input
+                type="file"
+                multiple
+                accept=".csv,.txt,.dat"
+                className="hidden"
+                onChange={handleFileUpload}
+              />
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {batchFiles.map((b) => {
+              const isSelected = uploadedFilename === b.name;
+              return (
+                <div
+                  key={b.id}
+                  className={`p-3.5 rounded-[12px] border transition-all flex flex-col justify-between gap-2.5 ${
+                    isSelected
+                      ? "bg-[#EFF6FF]/60 border-[#3182F6] shadow-xs"
+                      : "bg-[#F8FAFC] border-[#E5E8EB] hover:border-[#CBD5E1]"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[13px] font-bold text-[#191F28] truncate" title={b.name}>
+                        {b.name}
+                      </div>
+                      <div className="text-[11px] text-[#6B7684] mt-0.5">
+                        크기: {(b.file.size / 1024).toFixed(1)} KB
+                      </div>
+                    </div>
+                    {b.status === "completed" && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#DCFCE7] text-[#15803D] shrink-0">
+                        분석 완료
+                      </span>
+                    )}
+                    {b.status === "analyzing" && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#DBEAFE] text-[#1D4ED8] flex items-center gap-1 shrink-0">
+                        <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                        분석 중
+                      </span>
+                    )}
+                    {b.status === "waiting" && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#F1F5F9] text-[#64748B] shrink-0">
+                        대기
+                      </span>
+                    )}
+                    {b.status === "error" && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#FEE2E2] text-[#DC2626] shrink-0">
+                        오류
+                      </span>
+                    )}
+                  </div>
+
+                  {b.status === "completed" && b.result && (
+                    <div className="text-[11px] font-mono text-[#334155] bg-white p-2 rounded-[8px] border border-[#E2E8F0] space-y-0.5">
+                      <div>타입: <strong className={b.result.carrier_type?.includes("n-type") ? "text-[#1D4ED8]" : "text-[#BE185D]"}>{b.result.carrier_type}</strong></div>
+                      <div>농도 n: <strong className="text-[#1D4ED8]">{b.result.carrier_concentration_cm3?.toExponential(2)} cm⁻³</strong></div>
+                      <div>이동도 μ: <strong className="text-[#059669]">{b.result.hall_mobility_cm2_Vs?.toFixed(1)} cm²/Vs</strong></div>
+                    </div>
+                  )}
+
+                  {b.status === "error" && (
+                    <div className="text-[11px] text-[#DC2626] bg-[#FEF2F2] p-2 rounded border border-[#FECACA]">
+                      {b.error || "분석 오류 발생"}
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-1 border-t border-[#E5E8EB]">
+                    {b.status === "completed" ? (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectBatchItem(b)}
+                        className={`text-[11px] font-bold cursor-pointer ${
+                          isSelected ? "text-[#3182F6]" : "text-[#64748B] hover:text-[#191F28]"
+                        }`}
+                      >
+                        {isSelected ? "현재 상세 검토 중" : "상세 검토 선택"}
+                      </button>
+                    ) : (
+                      <span className="text-[11px] text-[#94A3B8]">—</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveBatchItem(b.id)}
+                      className="text-[#94A3B8] hover:text-[#DC2626] text-[11px] cursor-pointer"
+                      title="목록에서 제거"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* Multi-Curve Overlay & Comparison View (when 2 or more files completed) */}
+      {completedBatchItems.length >= 2 && (
+        <Card className="p-5 space-y-5 border-2 border-[#BFDBFE] bg-gradient-to-br from-white to-[#F8FAFC]">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E8EB] pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Layers className="w-5 h-5 text-[#3182F6]" />
+                <h3 className="text-[17px] font-bold text-[#191F28]">
+                  다중 Hall 측정 자기장-전압 곡선 중첩 및 지표 비교 ({completedBatchItems.length}개 파일)
+                </h3>
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE]">
+                  독립 수치 계산 완료
+                </span>
+              </div>
+              <p className="text-[12px] text-[#6B7684] mt-1">
+                각 측정 파일의 자기장(B) 대비 홀 전압(V_H) 곡선을 동일 축 상에서 중첩 비교하고 캐리어 특성을 대조합니다.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleDownloadComparisonCsv}
+                className="text-[12px] font-bold text-[#1D4ED8] border-[#BFDBFE] hover:bg-[#EFF6FF]"
+              >
+                <Download className="w-3.5 h-3.5 mr-1 text-[#3182F6]" />
+                비교표 CSV 내보내기
+              </Button>
+            </div>
+          </div>
+
+          {/* Visibility toggle pills */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[12px] font-semibold text-[#6B7684]">표시 곡선 선택:</span>
+            {completedBatchItems.map((b, idx) => {
+              const colors = ["#2563EB", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#06B6D4", "#EC4899", "#84CC16"];
+              const color = colors[idx % colors.length];
+              const isHidden = hiddenCurves[b.id];
+              return (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() => setHiddenCurves((prev) => ({ ...prev, [b.id]: !prev[b.id] }))}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold border transition-all cursor-pointer ${
+                    isHidden
+                      ? "bg-[#F8FAFC] border-[#E2E8F0] text-[#94A3B8] line-through"
+                      : "bg-white border-[#CBD5E1] text-[#191F28] shadow-xs"
+                  }`}
+                >
+                  <span
+                    className="w-2.5 h-2.5 rounded-full"
+                    style={{ backgroundColor: isHidden ? "#CBD5E1" : color }}
+                  />
+                  <span>{b.name}</span>
+                  {isHidden ? <EyeOff className="w-3 h-3 text-[#94A3B8]" /> : <Eye className="w-3 h-3 text-[#64748B]" />}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Plotly Multi-Curve Overlay */}
+          <div className="w-full bg-white rounded-[14px] border border-[#E5E8EB] p-3 shadow-xs">
+            <PlotlyChart
+              data={completedBatchItems
+                .filter((b) => !hiddenCurves[b.id])
+                .map((b, idx) => {
+                  const colors = ["#2563EB", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#06B6D4", "#EC4899", "#84CC16"];
+                  const color = colors[idx % colors.length];
+                  const xVals = b.result?.antisym_b_field?.length ? b.result.antisym_b_field : b.result?.raw_b_field || [];
+                  const yVals = b.result?.antisym_v_hall?.length ? b.result.antisym_v_hall : b.result?.raw_v_hall || [];
+                  return {
+                    x: xVals,
+                    y: yVals,
+                    type: "scatter",
+                    mode: "lines+markers",
+                    name: b.name,
+                    line: { color, width: 2 },
+                    marker: { size: 5, color },
+                    hovertemplate: `<b>${b.name}</b><br>자기장: %{x:.2f} T<br>전압: %{y:.3f} mV<extra></extra>`,
+                  };
+                })}
+              layout={{
+                title: { text: "다중 Hall 전압 곡선 중첩 (Magnetic Field vs Transverse Voltage)", font: { size: 14 } },
+                xaxis: { title: "자기장 Magnetic Field B (T)", gridcolor: "#F1F5F9" },
+                yaxis: { title: "홀 전압 Transverse Voltage V_H (mV)", gridcolor: "#F1F5F9" },
+                hovermode: "closest",
+                legend: { orientation: "h", y: -0.2 },
+                margin: { l: 60, r: 20, t: 40, b: 60 },
+                autosize: true,
+              }}
+              style={{ width: "100%", height: "400px" }}
+            />
+          </div>
+
+          {/* Quantitative Comparison Table */}
+          <div className="overflow-x-auto rounded-[12px] border border-[#E5E8EB] bg-white">
+            <table className="w-full text-left text-[12px] border-collapse">
+              <thead>
+                <tr className="bg-[#F8FAFC] border-b border-[#E5E8EB] text-[#475569] font-bold">
+                  <th className="py-2.5 px-3">파일명</th>
+                  <th className="py-2.5 px-3">캐리어 형태</th>
+                  <th className="py-2.5 px-3">캐리어 농도 n (cm⁻³)</th>
+                  <th className="py-2.5 px-3">홀 이동도 μ_H (cm²/Vs)</th>
+                  <th className="py-2.5 px-3">전기전도도 σ (S/cm)</th>
+                  <th className="py-2.5 px-3">비저항 ρ (Ω·cm)</th>
+                  <th className="py-2.5 px-3">결정계수 R²</th>
+                  <th className="py-2.5 px-3">작업</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#F1F5F9]">
+                {completedBatchItems.map((b) => (
+                  <tr key={b.id} className="hover:bg-[#F8FAFC]">
+                    <td className="py-2.5 px-3 font-semibold text-[#191F28] flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-[#3182F6]" />
+                      <span>{b.name}</span>
+                    </td>
+                    <td className="py-2.5 px-3">
+                      <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                        b.result?.carrier_type?.includes("n-type") ? "bg-[#EFF6FF] text-[#1D4ED8]" : "bg-[#FDF2F8] text-[#BE185D]"
+                      }`}>
+                        {b.result?.carrier_type || "-"}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 font-mono font-bold text-[#1D4ED8]">
+                      {b.result?.carrier_concentration_cm3 ? b.result.carrier_concentration_cm3.toExponential(3) : "-"}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-[#059669]">
+                      {b.result?.hall_mobility_cm2_Vs ? b.result.hall_mobility_cm2_Vs.toFixed(1) : "-"}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-[#7C3AED]">
+                      {b.result?.electrical_conductivity_S_cm ? b.result.electrical_conductivity_S_cm.toFixed(1) : "-"}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-[#D97706]">
+                      {b.result?.resistivity_Ohm_cm ? b.result.resistivity_Ohm_cm.toExponential(3) : "-"}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-[#64748B]">
+                      {b.result?.r_squared ? b.result.r_squared.toFixed(5) : "-"}
+                    </td>
+                    <td className="py-2.5 px-3">
+                      <button
+                        type="button"
+                        onClick={() => handleSelectBatchItem(b)}
+                        className="px-2 py-1 rounded-[6px] text-[11px] font-bold bg-[#EFF6FF] text-[#1D4ED8] hover:bg-[#DBEAFE] cursor-pointer"
+                      >
+                        상세 보기
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
 
       {/* Input Configuration & File Area */}
@@ -469,8 +948,8 @@ MagneticField_T,TransverseVoltage_mV
             <div className="flex justify-between items-center mb-1">
               <label className="text-[12px] font-semibold text-[#4E5968]">원시 데이터 (B vs V_H) 입력 또는 파일 업로드</label>
               <label className="text-[12px] text-[#3182F6] font-semibold cursor-pointer hover:underline">
-                파일 찾기 (CSV/TXT)
-                <input type="file" accept=".csv,.txt,.dat" onChange={handleFileUpload} className="hidden" />
+                파일 찾기 (CSV/TXT · 복수 선택 가능)
+                <input type="file" multiple accept=".csv,.txt,.dat" onChange={handleFileUpload} className="hidden" />
               </label>
             </div>
             <textarea

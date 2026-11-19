@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Upload,
   FileSpreadsheet,
@@ -12,6 +12,11 @@ import {
   Activity,
   ArrowRight,
   Trash2,
+  Layers,
+  FileText,
+  Eye,
+  EyeOff,
+  RefreshCw,
 } from "lucide-react";
 import { api } from "../api";
 import type {
@@ -22,6 +27,18 @@ import type {
   UTMParsedData,
 } from "../types";
 import { Button, Card } from "./ui/primitives";
+import { PlotlyChart } from "./PlotlyChart";
+
+export interface UtmBatchItem {
+  id: string;
+  name: string;
+  file: File;
+  status: "waiting" | "analyzing" | "completed" | "error";
+  parsed?: UTMParsedData;
+  result?: UTMAnalysisResult;
+  error?: string;
+  measurementId?: string;
+}
 
 interface UtmViewProps {
   activeSample?: ProjectDetail | ProjectListItem | null;
@@ -40,6 +57,11 @@ export function UtmView({ activeSample, onRecordSaved, onNavigateToIntegrated }:
   const [isParsing, setIsParsing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Multi-file batch state & overlay toggles
+  const [batchFiles, setBatchFiles] = useState<UtmBatchItem[]>([]);
+  const [hiddenCurves, setHiddenCurves] = useState<Record<string, boolean>>({});
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
 
   // Analysis Parameters
   const [analysisName, setAnalysisName] = useState("UTM 인장시험 분석");
@@ -159,6 +181,190 @@ export function UtmView({ activeSample, onRecordSaved, onNavigateToIntegrated }:
       setIsParsing(false);
     }
   };
+
+  // Multi-file batch upload handler
+  const handleMultipleFiles = async (files: File[]) => {
+    if (!files || files.length === 0) return;
+    setErrorMsg(null);
+    setIsBatchProcessing(true);
+
+    const newItems: UtmBatchItem[] = files.map((f, i) => ({
+      id: `batch_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`,
+      name: f.name,
+      file: f,
+      status: "waiting",
+    }));
+
+    setBatchFiles((prev) => [...prev, ...newItems]);
+
+    // Analyze each file independently (failure isolation)
+    for (const item of newItems) {
+      setBatchFiles((prev) =>
+        prev.map((b) => (b.id === item.id ? { ...b, status: "analyzing" } : b))
+      );
+      try {
+        const parsed = await api.parseUtm(item.file);
+        const defaultName = activeSample?.sample_name
+          ? `${activeSample.sample_name} — ${item.file.name}`
+          : item.file.name.replace(/\.[^/.]+$/, "");
+        const request = {
+          parsed_data: parsed,
+          start_index: 0,
+          end_index: parsed.row_count,
+          elastic_start_strain_pct: 0.05,
+          elastic_end_strain_pct: 0.30,
+          analysis_name: defaultName,
+          calc_offset_yield: true,
+        };
+        const res = await api.analyzeUtm(request);
+
+        let measurementId: string | undefined;
+        if (activeSample?.id) {
+          const uts = res.peak_stress?.stress_MPa ?? "-";
+          const eMod = res.elastic_modulus?.is_valid ? res.elastic_modulus.E_GPa : "-";
+          const saved = await api.saveSampleRecord(activeSample.id, {
+            instrument_type: "utm",
+            original_filename: item.file.name,
+            metadata: { row_count: parsed.row_count, encoding: parsed.encoding },
+            raw_payload: { parsed_data: parsed, request },
+            parameters: {
+              start_index: 0,
+              end_index: parsed.row_count,
+              elastic_start_strain_pct: 0.05,
+              elastic_end_strain_pct: 0.30,
+            },
+            results: res,
+            summary_text: `UTS ${uts} MPa · E ${eMod} GPa`,
+          });
+          measurementId = saved?.measurement_id;
+        }
+
+        setBatchFiles((prev) =>
+          prev.map((b) =>
+            b.id === item.id
+              ? { ...b, status: "completed", parsed, result: res, measurementId }
+              : b
+          )
+        );
+
+        // Populate detail view if none active
+        setParsedData((curr) => {
+          if (!curr) {
+            setFile(item.file);
+            setStartIndex(0);
+            setEndIndex(parsed.row_count);
+            setAnalysisName(defaultName);
+            setAnalyzedRequest(request);
+            setAnalysisResult(res);
+            if (measurementId) setActiveMeasurementId(measurementId);
+            return parsed;
+          }
+          return curr;
+        });
+      } catch (err: any) {
+        setBatchFiles((prev) =>
+          prev.map((b) =>
+            b.id === item.id
+              ? { ...b, status: "error", error: err?.message || "분석 실패" }
+              : b
+          )
+        );
+      }
+    }
+
+    setIsBatchProcessing(false);
+    refreshSampleRecords();
+    onRecordSaved?.();
+  };
+
+  const handleSelectBatchItem = (item: UtmBatchItem) => {
+    if (item.parsed && item.result) {
+      setFile(item.file);
+      setParsedData(item.parsed);
+      setStartIndex(0);
+      setEndIndex(item.parsed.row_count);
+      const defaultName = activeSample?.sample_name
+        ? `${activeSample.sample_name} — ${item.file.name}`
+        : item.file.name.replace(/\.[^/.]+$/, "");
+      setAnalysisName(defaultName);
+      setAnalysisResult(item.result);
+      if (item.measurementId) setActiveMeasurementId(item.measurementId);
+    }
+  };
+
+  const handleRemoveBatchItem = (id: string) => {
+    setBatchFiles((prev) => prev.filter((b) => b.id !== id));
+  };
+
+  const handleDownloadComparisonCsv = () => {
+    const completed = batchFiles.filter((b) => b.status === "completed" && b.result);
+    if (completed.length === 0) return;
+    const headers = [
+      "파일명",
+      "최대인장강도_UTS(MPa)",
+      "0.2%오프셋항복강도(MPa)",
+      "탄성계수_E(GPa)",
+      "파단연신율(%)",
+      "음수하중검출여부",
+    ];
+    const rows = completed.map((b) => [
+      b.name,
+      b.result?.peak_stress?.stress_MPa ?? "",
+      b.result?.offset_yield?.is_valid ? b.result.offset_yield.yield_stress_MPa : "",
+      b.result?.elastic_modulus?.is_valid ? b.result.elastic_modulus.E_GPa : "",
+      b.result?.peak_stress?.strain_pct ?? "",
+      b.result?.negative_load_summary?.first_serial ? "음수하중검출" : "정상",
+    ]);
+    const content = [
+      headers.join(","),
+      ...rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")),
+    ].join("\n");
+    const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `utm_comparison_${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const completedBatchItems = useMemo(
+    () => batchFiles.filter((b) => b.status === "completed" && b.result),
+    [batchFiles]
+  );
+
+  const comparisonStats = useMemo(() => {
+    if (completedBatchItems.length < 2) return null;
+    const utsList = completedBatchItems
+      .map((b) => b.result?.peak_stress?.stress_MPa)
+      .filter((v): v is number => typeof v === "number");
+    const yldList = completedBatchItems
+      .map((b) => (b.result?.offset_yield?.is_valid ? b.result.offset_yield.yield_stress_MPa : null))
+      .filter((v): v is number => typeof v === "number");
+    const eList = completedBatchItems
+      .map((b) => (b.result?.elastic_modulus?.is_valid ? b.result.elastic_modulus.E_GPa : null))
+      .filter((v): v is number => typeof v === "number");
+    const elList = completedBatchItems
+      .map((b) => b.result?.peak_stress?.strain_pct)
+      .filter((v): v is number => typeof v === "number");
+
+    const statsOf = (arr: number[]) => {
+      if (arr.length === 0) return null;
+      const min = Math.min(...arr);
+      const max = Math.max(...arr);
+      const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+      const diff = max - min;
+      const deltaPct = avg > 0 ? (diff / avg) * 100 : 0;
+      return { min, max, avg, diff, deltaPct };
+    };
+
+    return {
+      uts: statsOf(utsList),
+      yield: statsOf(yldList),
+      eMod: statsOf(eList),
+      elong: statsOf(elList),
+    };
+  }, [completedBatchItems]);
 
   // Re-run analysis with current parameters
   const runAnalysis = useCallback(async () => {
@@ -508,14 +714,18 @@ export function UtmView({ activeSample, onRecordSaved, onNavigateToIntegrated }:
             </button>
             <label className="flex items-center gap-2 px-4 py-2.5 rounded-[12px] bg-[#3182F6] text-white font-semibold text-[14px] cursor-pointer hover:bg-[#2563EB] transition-colors shadow-sm">
               <Upload className="w-4 h-4" />
-              <span>{isParsing ? "파일 분석 중..." : "UTM 파일 불러오기"}</span>
+              <span>{isBatchProcessing || isParsing ? "파일 분석 중..." : "UTM 파일 복수 업로드"}</span>
               <input
                 type="file"
+                multiple
                 accept=".txt,.csv,.tsv,.dat"
                 className="hidden"
                 onChange={(e) => {
-                  if (e.target.files && e.target.files[0]) {
-                    handleFileChange(e.target.files[0]);
+                  const files = Array.from(e.target.files || []);
+                  if (files.length === 1) {
+                    handleFileChange(files[0]);
+                  } else if (files.length > 1) {
+                    handleMultipleFiles(files);
                   }
                 }}
               />
@@ -623,18 +833,25 @@ export function UtmView({ activeSample, onRecordSaved, onNavigateToIntegrated }:
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
-            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-              handleFileChange(e.dataTransfer.files[0]);
+            const files = Array.from(e.dataTransfer.files || []);
+            if (files.length === 1) {
+              handleFileChange(files[0]);
+            } else if (files.length > 1) {
+              handleMultipleFiles(files);
             }
           }}
           className="border-2 border-dashed border-[#D1D5DB] rounded-[24px] p-12 text-center bg-white/60 hover:bg-white hover:border-[#3182F6] transition-all cursor-pointer"
           onClick={() => {
             const input = document.createElement("input");
             input.type = "file";
+            input.multiple = true;
             input.accept = ".txt,.csv,.tsv,.dat";
             input.onchange = (e: any) => {
-              if (e.target.files && e.target.files[0]) {
-                handleFileChange(e.target.files[0]);
+              const files = Array.from((e.target?.files || []) as FileList) as File[];
+              if (files.length === 1) {
+                handleFileChange(files[0]);
+              } else if (files.length > 1) {
+                handleMultipleFiles(files);
               }
             };
             input.click();
@@ -644,15 +861,290 @@ export function UtmView({ activeSample, onRecordSaved, onNavigateToIntegrated }:
             <Upload className="w-7 h-7" />
           </div>
           <div className="text-[17px] font-bold text-[#191F28] mb-1">
-            UTM Raw Data 파일(TXT, CSV, TSV)을 이곳에 끌어다 놓으세요
+            UTM Raw Data 파일(TXT, CSV, TSV)을 이곳에 끌어다 놓으세요 (복수 파일 지원)
           </div>
           <p className="text-[13px] text-[#8B95A1] max-w-md mx-auto mb-4">
-            공백·탭·쉼표 구분자, 열 이름 및 단위 행 분리 자동 인식, UTF-8 및 CP949 인코딩을 자동 지원합니다.
+            여러 파일을 한 번에 선택하여 개별 분석하고 다중 응력-변형률 곡선 중첩 및 지표 비교표를 바로 생성할 수 있습니다.
           </p>
           <Button variant="outline" size="sm">
-            컴퓨터에서 파일 선택
+            컴퓨터에서 복수 파일 선택
           </Button>
         </div>
+      )}
+
+      {/* Batch Files Queue / Active List */}
+      {batchFiles.length > 0 && (
+        <Card className="p-5 space-y-4 bg-white border border-[#E5E8EB]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F2F4F6] pb-3">
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet className="w-4 h-4 text-[#3182F6]" />
+              <span className="font-bold text-[14px] text-[#191F28]">
+                업로드된 UTM 측정 파일 목록 ({batchFiles.length}개)
+              </span>
+              <span className="text-[11px] text-[#6B7684]">
+                완료 {completedBatchItems.length}개 · 분석 중 {batchFiles.filter((b) => b.status === "analyzing").length}개
+              </span>
+            </div>
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[9px] text-[12px] font-bold text-[#3182F6] bg-[#EFF6FF] hover:bg-[#DBEAFE] border border-[#BFDBFE] transition-colors cursor-pointer">
+              <Upload className="w-3.5 h-3.5" />
+              <span>추가 파일 업로드</span>
+              <input
+                type="file"
+                multiple
+                accept=".txt,.csv,.tsv,.dat"
+                className="hidden"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files || []);
+                  if (files.length > 0) handleMultipleFiles(files);
+                }}
+              />
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {batchFiles.map((b) => {
+              const isSelected = parsedData?.filename === b.name || parsedData?.filename === b.file.name;
+              return (
+                <div
+                  key={b.id}
+                  className={`p-3.5 rounded-[12px] border transition-all flex flex-col justify-between gap-2.5 ${
+                    isSelected
+                      ? "bg-[#EFF6FF]/60 border-[#3182F6] shadow-xs"
+                      : "bg-[#F8FAFC] border-[#E5E8EB] hover:border-[#CBD5E1]"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[13px] font-bold text-[#191F28] truncate" title={b.name}>
+                        {b.name}
+                      </div>
+                      <div className="text-[11px] text-[#6B7684] mt-0.5">
+                        크기: {(b.file.size / 1024).toFixed(1)} KB
+                      </div>
+                    </div>
+                    {b.status === "completed" && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#DCFCE7] text-[#15803D] shrink-0">
+                        분석 완료
+                      </span>
+                    )}
+                    {b.status === "analyzing" && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#DBEAFE] text-[#1D4ED8] flex items-center gap-1 shrink-0">
+                        <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                        분석 중
+                      </span>
+                    )}
+                    {b.status === "waiting" && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#F1F5F9] text-[#64748B] shrink-0">
+                        대기
+                      </span>
+                    )}
+                    {b.status === "error" && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#FEE2E2] text-[#DC2626] shrink-0">
+                        오류
+                      </span>
+                    )}
+                  </div>
+
+                  {b.status === "completed" && b.result && (
+                    <div className="text-[11px] font-mono text-[#334155] bg-white p-2 rounded-[8px] border border-[#E2E8F0] space-y-0.5">
+                      <div>UTS: <strong className="text-[#1D4ED8]">{b.result.peak_stress?.stress_MPa ?? "-"} MPa</strong></div>
+                      <div>E: <strong className="text-[#7C3AED]">{b.result.elastic_modulus?.is_valid ? `${b.result.elastic_modulus.E_GPa} GPa` : "-"}</strong></div>
+                    </div>
+                  )}
+
+                  {b.status === "error" && (
+                    <div className="text-[11px] text-[#DC2626] bg-[#FEF2F2] p-2 rounded border border-[#FECACA]">
+                      {b.error || "분석 오류 발생"}
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-1 border-t border-[#E5E8EB]">
+                    {b.status === "completed" ? (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectBatchItem(b)}
+                        className={`text-[11px] font-bold cursor-pointer ${
+                          isSelected ? "text-[#3182F6]" : "text-[#64748B] hover:text-[#191F28]"
+                        }`}
+                      >
+                        {isSelected ? "현재 상세 검토 중" : "상세 검토 선택"}
+                      </button>
+                    ) : (
+                      <span className="text-[11px] text-[#94A3B8]">—</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveBatchItem(b.id)}
+                      className="text-[#94A3B8] hover:text-[#DC2626] text-[11px] cursor-pointer"
+                      title="목록에서 제거"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* Multi-Curve Overlay & Comparison View (when 2 or more files completed) */}
+      {completedBatchItems.length >= 2 && (
+        <Card className="p-5 space-y-5 border-2 border-[#BFDBFE] bg-gradient-to-br from-white to-[#F8FAFC]">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E8EB] pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Layers className="w-5 h-5 text-[#3182F6]" />
+                <h3 className="text-[17px] font-bold text-[#191F28]">
+                  다중 UTM 인장시험 곡선 중첩 및 정량 비교 ({completedBatchItems.length}개 파일)
+                </h3>
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE]">
+                  독립 수치 계산 완료
+                </span>
+              </div>
+              <p className="text-[12px] text-[#6B7684] mt-1">
+                각 측정 파일은 독립적으로 파싱·계산되어 배열 왜곡 없이 동일 축 상에서 정밀 비교됩니다.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleDownloadComparisonCsv}
+                className="text-[12px] font-bold text-[#1D4ED8] border-[#BFDBFE] hover:bg-[#EFF6FF]"
+              >
+                <Download className="w-3.5 h-3.5 mr-1 text-[#3182F6]" />
+                비교표 CSV 내보내기
+              </Button>
+            </div>
+          </div>
+
+          {/* Visibility toggle pills */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[12px] font-semibold text-[#6B7684]">표시 곡선 선택:</span>
+            {completedBatchItems.map((b, idx) => {
+              const colors = ["#2563EB", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#06B6D4", "#EC4899", "#84CC16"];
+              const color = colors[idx % colors.length];
+              const isHidden = hiddenCurves[b.id];
+              return (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() => setHiddenCurves((prev) => ({ ...prev, [b.id]: !prev[b.id] }))}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold border transition-all cursor-pointer ${
+                    isHidden
+                      ? "bg-[#F8FAFC] border-[#E2E8F0] text-[#94A3B8] line-through"
+                      : "bg-white border-[#CBD5E1] text-[#191F28] shadow-xs"
+                  }`}
+                >
+                  <span
+                    className="w-2.5 h-2.5 rounded-full"
+                    style={{ backgroundColor: isHidden ? "#CBD5E1" : color }}
+                  />
+                  <span>{b.name}</span>
+                  {isHidden ? <EyeOff className="w-3 h-3 text-[#94A3B8]" /> : <Eye className="w-3 h-3 text-[#64748B]" />}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Plotly Multi-Curve Overlay */}
+          <div className="w-full bg-white rounded-[14px] border border-[#E5E8EB] p-3 shadow-xs">
+            <PlotlyChart
+              data={completedBatchItems
+                .filter((b) => !hiddenCurves[b.id])
+                .map((b, idx) => {
+                  const colors = ["#2563EB", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#06B6D4", "#EC4899", "#84CC16"];
+                  const color = colors[idx % colors.length];
+                  return {
+                    x: b.result?.curves.strain_pct || [],
+                    y: b.result?.curves.stress_MPa || [],
+                    type: "scatter",
+                    mode: "lines",
+                    name: b.name,
+                    line: { color, width: 2.2 },
+                    hovertemplate: `<b>${b.name}</b><br>변형률: %{x:.2f}%<br>응력: %{y:.1f} MPa<extra></extra>`,
+                  };
+                })}
+              layout={{
+                title: { text: "다중 UTM 응력-변형률 곡선 중첩 (Stress-Strain Overlay)", font: { size: 14 } },
+                xaxis: { title: "변형률 Strain (%)", gridcolor: "#F1F5F9" },
+                yaxis: { title: "응력 Stress (MPa)", gridcolor: "#F1F5F9" },
+                hovermode: "closest",
+                legend: { orientation: "h", y: -0.2 },
+                margin: { l: 60, r: 20, t: 40, b: 60 },
+                autosize: true,
+              }}
+              style={{ width: "100%", height: "420px" }}
+            />
+          </div>
+
+          {/* Quantitative Comparison Table */}
+          <div className="overflow-x-auto rounded-[12px] border border-[#E5E8EB] bg-white">
+            <table className="w-full text-left text-[12px] border-collapse">
+              <thead>
+                <tr className="bg-[#F8FAFC] border-b border-[#E5E8EB] text-[#475569] font-bold">
+                  <th className="py-2.5 px-3">파일명</th>
+                  <th className="py-2.5 px-3">최대 인장강도 UTS (MPa)</th>
+                  <th className="py-2.5 px-3">0.2% 오프셋 항복강도 (MPa)</th>
+                  <th className="py-2.5 px-3">탄성계수 E (GPa)</th>
+                  <th className="py-2.5 px-3">파단 연신율 (%)</th>
+                  <th className="py-2.5 px-3">작업</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#F1F5F9]">
+                {completedBatchItems.map((b) => (
+                  <tr key={b.id} className="hover:bg-[#F8FAFC]">
+                    <td className="py-2.5 px-3 font-semibold text-[#191F28] flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-[#3182F6]" />
+                      <span>{b.name}</span>
+                    </td>
+                    <td className="py-2.5 px-3 font-mono font-bold text-[#1D4ED8]">
+                      {b.result?.peak_stress?.stress_MPa !== undefined ? `${b.result.peak_stress.stress_MPa} MPa` : "-"}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-[#059669]">
+                      {b.result?.offset_yield?.is_valid ? `${b.result.offset_yield.yield_stress_MPa} MPa` : "미검출"}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-[#7C3AED]">
+                      {b.result?.elastic_modulus?.is_valid ? `${b.result.elastic_modulus.E_GPa} GPa` : "-"}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-[#D97706]">
+                      {b.result?.peak_stress?.strain_pct !== undefined ? `${b.result.peak_stress.strain_pct}%` : "-"}
+                    </td>
+                    <td className="py-2.5 px-3">
+                      <button
+                        type="button"
+                        onClick={() => handleSelectBatchItem(b)}
+                        className="px-2 py-1 rounded-[6px] text-[11px] font-bold bg-[#EFF6FF] text-[#1D4ED8] hover:bg-[#DBEAFE] cursor-pointer"
+                      >
+                        상세 보기
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {comparisonStats && (
+                  <tr className="bg-[#EFF6FF]/60 font-bold text-[#1D4ED8] border-t-2 border-[#BFDBFE]">
+                    <td className="py-2.5 px-3">최대 편차 (Δ = Max - Min)</td>
+                    <td className="py-2.5 px-3 font-mono">
+                      {comparisonStats.uts ? `Δ ${comparisonStats.uts.diff.toFixed(1)} MPa (${comparisonStats.uts.deltaPct.toFixed(1)}%)` : "-"}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono">
+                      {comparisonStats.yield ? `Δ ${comparisonStats.yield.diff.toFixed(1)} MPa (${comparisonStats.yield.deltaPct.toFixed(1)}%)` : "-"}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono">
+                      {comparisonStats.eMod ? `Δ ${comparisonStats.eMod.diff.toFixed(2)} GPa (${comparisonStats.eMod.deltaPct.toFixed(1)}%)` : "-"}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono">
+                      {comparisonStats.elong ? `Δ ${comparisonStats.elong.diff.toFixed(2)}% (${comparisonStats.elong.deltaPct.toFixed(1)}%)` : "-"}
+                    </td>
+                    <td className="py-2.5 px-3 text-[#64748B] text-[11px]">요약 통계</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
 
       {/* Parsed File Data Overview & Controls */}

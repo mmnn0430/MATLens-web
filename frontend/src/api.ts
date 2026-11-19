@@ -9,6 +9,10 @@ import type {
   SEMParams,
   XRDParams,
   XrdSeriesCurveItem,
+  SavedAnalysisItem,
+  SavedAnalysisCounts,
+  ScopedIntegratedReportRequest,
+  IntegratedReportSnapshot,
 } from "./types";
 
 export const DEFAULT_XRD_PARAMS: XRDParams = {
@@ -567,5 +571,34 @@ export const api = {
       body: JSON.stringify({ instrument, items }),
     });
     return handleJson<any>(r);
+  },
+
+  getSavedAnalyses: async (params?: { instrument?: string; sample_id?: string; query?: string }) => {
+    const searchParams = new URLSearchParams();
+    if (params?.instrument) searchParams.set("instrument", params.instrument);
+    if (params?.sample_id) searchParams.set("sample_id", params.sample_id);
+    if (params?.query) searchParams.set("query", params.query);
+    const qs = searchParams.toString() ? `?${searchParams.toString()}` : "";
+    const r = await fetch(`/api/v1/saved-analyses${qs}`);
+    return handleJson<{ items: SavedAnalysisItem[]; counts: SavedAnalysisCounts; total_count: number }>(r);
+  },
+
+  getSavedAnalysesCounts: async () => {
+    const r = await fetch("/api/v1/saved-analyses/counts");
+    return handleJson<{ counts: SavedAnalysisCounts }>(r);
+  },
+
+  runIntegratedScopedAnalysis: async (payload: ScopedIntegratedReportRequest) => {
+    const r = await fetch("/api/v1/analysis/integrated-scoped", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return handleJson<IntegratedReportSnapshot>(r);
+  },
+
+  getReportSnapshot: async (reportId: string) => {
+    const r = await fetch(`/api/v1/reports/${reportId}`);
+    return handleJson<IntegratedReportSnapshot>(r);
   },
 };

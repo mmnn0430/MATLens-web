@@ -185,6 +185,114 @@ export function SpectroView({
     }
   };
 
+  // Multi-file batch upload handler
+  const handleMultipleFiles = async (files: File[]) => {
+    if (!files || files.length === 0) return;
+    setIsParsing(true);
+    setErrorMsg(null);
+
+    const newCompareItems: any[] = [...compareItems];
+
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      try {
+        const parsed = await api.parseSpectroFile(instrument, f);
+
+        let conditions: Record<string, any> = {};
+        if (instrument === "ftir") {
+          conditions = {
+            signal_type: ftirSignalType,
+            refractive_index: parseFloat(ftirRefractiveIndex) > 0 ? parseFloat(ftirRefractiveIndex) : null,
+            fringe_min_wn: parseFloat(ftirFringeMinWn) || 2400.0,
+            fringe_max_wn: parseFloat(ftirFringeMaxWn) || 2750.0,
+            fringe_prominence: parseFloat(ftirProminence) || 1.5,
+            use_smoothing: ftirUseSmoothing,
+            use_baseline_correction: ftirUseBaseline,
+          };
+        } else if (instrument === "dsc") {
+          conditions = {
+            sample_mass_mg: parseFloat(dscSampleMassMg) > 0 ? parseFloat(dscSampleMassMg) : null,
+            heat_flow_unit: dscHeatFlowUnit,
+            standard_melting_enthalpy_J_per_g: parseFloat(dscStdEnthalpy) > 0 ? parseFloat(dscStdEnthalpy) : null,
+            polymer_mass_fraction: parseFloat(dscPolymerFraction) || 1.0,
+            selected_segment_id: dscSelectedSegmentId || undefined,
+          };
+        } else if (instrument === "tga") {
+          conditions = {
+            initial_mass_mg: parseFloat(tgaInitialMassMg) > 0 ? parseFloat(tgaInitialMassMg) : null,
+            gas_switch_temp_c: parseFloat(tgaGasSwitchTemp) > 0 ? parseFloat(tgaGasSwitchTemp) : null,
+            input_is_percent: tgaInputIsPercent,
+          };
+        }
+
+        const res = await api.analyzeSpectro(instrument, {
+          filename: f.name,
+          columns: parsed.columns,
+          column_data: parsed.column_data,
+          conditions,
+          notes: userNotes,
+        });
+
+        // Add to compare items
+        const newItem = {
+          sample_id: `sample_${Date.now()}_${i}`,
+          sample_name: f.name,
+          instrument,
+          analysis_result: res.analysis,
+          visible: true,
+          y_offset: 0,
+        };
+        newCompareItems.push(newItem);
+
+        // Save to sample record if active sample
+        if (activeSample?.id) {
+          let summaryText = `${instrument.toUpperCase()} 분석 완료`;
+          if (instrument === "ftir") {
+            summaryText = `주요 밴드 ${res.analysis?.peak_count ?? 0}개 검출`;
+          } else if (instrument === "dsc") {
+            const tmVal = res.analysis?.transitions?.melting?.tm_peak_c;
+            summaryText = tmVal ? `Tm ${Number(tmVal).toFixed(1)} °C` : "DSC 열전이 분석 완료";
+          } else if (instrument === "tga") {
+            const t10Val = res.analysis?.decomposition_characteristics?.T10_c;
+            summaryText = t10Val ? `T10 ${Number(t10Val).toFixed(1)} °C` : "TGA 열중량 분석 완료";
+          }
+          await api.saveSampleRecord(activeSample.id, {
+            instrument_type: instrument,
+            original_filename: f.name,
+            metadata: { encoding: parsed.encoding, row_count: parsed.raw_row_count },
+            raw_payload: { columns: parsed.columns, column_data: parsed.column_data },
+            parameters: conditions,
+            results: res.analysis,
+            summary_text: summaryText,
+          });
+        }
+
+        // If first file, set as active
+        if (i === 0 && !analysisResult) {
+          setFile(f);
+          setParsedData(parsed);
+          setAnalysisResult(res.analysis);
+        }
+      } catch (err: any) {
+        console.warn(`File ${f.name} analysis failed:`, err);
+      }
+    }
+
+    setCompareItems(newCompareItems);
+    if (newCompareItems.length > 0) {
+      try {
+        const res = await api.compareSpectro(instrument, newCompareItems);
+        setCompareTable(res.comparison_table || []);
+      } catch (err) {
+        console.warn("Failed to generate compare table:", err);
+      }
+    }
+
+    setIsParsing(false);
+    refreshSampleRecords();
+    onRecordSaved?.();
+  };
+
   // Run numerical calculation
   const executeAnalysis = useCallback(
     async (parsed?: any, filename?: string, condOverrides?: any) => {
@@ -359,6 +467,142 @@ export function SpectroView({
     api.compareSpectro(instrument, nextList).then((res) => {
       setCompareTable(res.comparison_table || []);
     });
+  };
+
+  const handleDownloadCompareTableCsv = () => {
+    if (compareTable.length === 0) return;
+    let headers: string[] = ["시료명"];
+    if (instrument === "ftir") {
+      headers = ["시료명", "피크수", "주요밴드파수(cm^-1)", "산출막두께(um)"];
+    } else if (instrument === "dsc") {
+      headers = ["시료명", "Tm(°C)", "Delta_Hm(J/g)", "Tc(°C)", "결정화도_Xc(%)"];
+    } else if (instrument === "tga") {
+      headers = ["시료명", "T5(°C)", "T10(°C)", "분해단계수", "최종잔류물(%)"];
+    }
+
+    const rows = compareTable.map((row) => {
+      if (instrument === "ftir") {
+        return [
+          row.sample_name,
+          row.peak_count,
+          row.top_peak_wavenumbers?.map((w: number) => w.toFixed(0)).join("; ") || "",
+          row.thickness_um ? row.thickness_um.toFixed(2) : "",
+        ];
+      } else if (instrument === "dsc") {
+        return [
+          row.sample_name,
+          row.tm_peak_c ? row.tm_peak_c.toFixed(1) : "",
+          row.delta_h_m_J_per_g || "",
+          row.tc_peak_c ? row.tc_peak_c.toFixed(1) : "",
+          row.crystallinity_pct ? row.crystallinity_pct.toFixed(1) : "",
+        ];
+      } else {
+        return [
+          row.sample_name,
+          row.T5_c ? row.T5_c.toFixed(1) : "",
+          row.T10_c ? row.T10_c.toFixed(1) : "",
+          row.steps_count || "",
+          row.final_residual_pct ? row.final_residual_pct.toFixed(2) : "",
+        ];
+      }
+    });
+
+    const content = [
+      headers.join(","),
+      ...rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")),
+    ].join("\n");
+    const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `spectro_${instrument}_comparison_${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const renderCompareOverlayPlot = () => {
+    if (compareItems.length === 0) return null;
+    const colors = ["#4F46E5", "#2563EB", "#10B981", "#D97706", "#DC2626", "#8B5CF6", "#06B6D4", "#EC4899"];
+
+    const traces: any[] = [];
+    compareItems.forEach((item, idx) => {
+      const color = colors[idx % colors.length];
+      const res = item.analysis_result;
+      if (!res) return;
+
+      if (instrument === "ftir") {
+        const xVals = res.wavenumbers || [];
+        const yVals = ftirSignalType === "absorbance" ? res.absorbance || [] : res.transmittance_pct || [];
+        traces.push({
+          x: xVals,
+          y: yVals,
+          type: "scatter",
+          mode: "lines",
+          name: item.sample_name,
+          line: { color, width: 2 },
+          hovertemplate: `<b>${item.sample_name}</b><br>%{x:.1f} cm⁻¹: %{y:.2f}<extra></extra>`,
+        });
+      } else if (instrument === "dsc") {
+        const xVals = res.temperatures || res.temperature_c || [];
+        const yVals = res.heat_flow || res.heat_flow_mw_per_mg || [];
+        traces.push({
+          x: xVals,
+          y: yVals,
+          type: "scatter",
+          mode: "lines",
+          name: item.sample_name,
+          line: { color, width: 2 },
+          hovertemplate: `<b>${item.sample_name}</b><br>%{x:.1f} °C: %{y:.3f} mW/mg<extra></extra>`,
+        });
+      } else if (instrument === "tga") {
+        const xVals = res.temperatures || res.temperature_c || [];
+        const yVals = res.weight_pct || res.mass_pct || [];
+        traces.push({
+          x: xVals,
+          y: yVals,
+          type: "scatter",
+          mode: "lines",
+          name: item.sample_name,
+          line: { color, width: 2 },
+          hovertemplate: `<b>${item.sample_name}</b><br>%{x:.1f} °C: %{y:.2f}%<extra></extra>`,
+        });
+      }
+    });
+
+    const xTitle = instrument === "ftir" ? "Wavenumber (cm⁻¹)" : "Temperature (°C)";
+    const yTitle =
+      instrument === "ftir"
+        ? ftirSignalType === "absorbance"
+          ? "흡광도 (A)"
+          : "투과율 (%T)"
+        : instrument === "dsc"
+        ? "Heat Flow (mW/mg)"
+        : "Weight (%)";
+
+    const layout = {
+      title: {
+        text: `다중 ${instrument.toUpperCase()} 스펙트럼 중첩 비교 (${compareItems.length}개 시료)`,
+        font: { size: 14, color: "#191F28" },
+      },
+      xaxis: {
+        title: xTitle,
+        autorange: instrument === "ftir" ? "reversed" : true,
+        gridcolor: "#F2F4F6",
+      },
+      yaxis: {
+        title: yTitle,
+        gridcolor: "#F2F4F6",
+      },
+      legend: { orientation: "h", y: -0.2 },
+      margin: { l: 60, r: 20, t: 40, b: 60 },
+      autosize: true,
+    };
+
+    return (
+      <div className="w-full bg-white rounded-[14px] border border-[#E5E8EB] p-3 shadow-xs">
+        <PlotlyChart data={traces} layout={layout} style={{ width: "100%", height: "400px" }} />
+      </div>
+    );
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -799,24 +1043,36 @@ export function SpectroView({
             </div>
 
             {/* Drag & Drop File Upload Area */}
-            <label className="block border-2 border-dashed border-[#D1D6DB] hover:border-[#4F46E5] bg-[#F8FAFC] rounded-[16px] p-6 text-center cursor-pointer transition-all">
-              <input
-                type="file"
-                accept=".csv,.txt,.tsv,.xlsx"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleFileUpload(f);
-                }}
-              />
+            <div
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const files = Array.from(e.dataTransfer.files || []);
+                if (files.length === 1) handleFileUpload(files[0]);
+                else if (files.length > 1) handleMultipleFiles(files);
+              }}
+              onClick={() => {
+                const input = document.createElement("input");
+                input.type = "file";
+                input.multiple = true;
+                input.accept = ".csv,.txt,.tsv,.xlsx";
+                input.onchange = (e: any) => {
+                  const files = Array.from((e.target?.files || []) as FileList) as File[];
+                  if (files.length === 1) handleFileUpload(files[0]);
+                  else if (files.length > 1) handleMultipleFiles(files);
+                };
+                input.click();
+              }}
+              className="block border-2 border-dashed border-[#D1D6DB] hover:border-[#4F46E5] bg-[#F8FAFC] rounded-[16px] p-6 text-center cursor-pointer transition-all"
+            >
               <Upload className="w-7 h-7 mx-auto text-[#6B7684] mb-2" />
               <div className="text-[13px] font-bold text-[#191F28]">
-                {file ? file.name : "CSV, TXT, TSV, XLSX 파일 업로드"}
+                {file ? file.name : "CSV, TXT, TSV, XLSX 파일 업로드 (복수 파일 지원)"}
               </div>
               <div className="text-[11px] text-[#8B95A1] mt-1">
-                쉼표(,), 탭, 공백 구분자 및 UTF-8 / CP949 인코딩 자동 인식
+                쉼표(,), 탭, 공백 구분자 및 UTF-8 / CP949 인코딩 자동 인식 · 여러 파일 일괄 업로드 지원
               </div>
-            </label>
+            </div>
 
             {/* Parsed File Meta Info */}
             {parsedData && (
@@ -1645,24 +1901,43 @@ export function SpectroView({
       {/* 7. Multi-Sample Comparison Table (when populated)                   */}
       {/* ─────────────────────────────────────────────────────────────────── */}
       {compareItems.length > 0 && (
-        <Card className="p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[14px] font-bold text-[#191F28] flex items-center gap-2">
-              <Layers className="w-4 h-4 text-[#4F46E5]" />
-              다중 시료 곡선 중첩 및 정량 비교표 ({compareItems.length}개 시료)
-            </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setCompareItems([]);
-                setCompareTable([]);
-              }}
-              className="text-[12px] text-[#DC2626]"
-            >
-              비교 목록 초기화
-            </Button>
+        <Card className="p-5 space-y-4 border-2 border-[#C7D2FE] bg-gradient-to-br from-white to-[#F8FAFC]">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E8EB] pb-3">
+            <div>
+              <span className="text-[15px] font-bold text-[#191F28] flex items-center gap-2">
+                <Layers className="w-5 h-5 text-[#4F46E5]" />
+                다중 {instrument.toUpperCase()} 곡선 중첩 및 정량 비교표 ({compareItems.length}개 시료)
+              </span>
+              <p className="text-[12px] text-[#6B7684] mt-0.5">
+                업로드된 모든 시료의 분광·열분석 곡선을 동일 축 상에서 비교하고 핵심 전이/피크 지표를 대조합니다.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleDownloadCompareTableCsv}
+                className="text-[12px] font-bold text-[#4F46E5] border-[#C7D2FE] hover:bg-[#EEF2FF]"
+              >
+                <Download className="w-3.5 h-3.5 mr-1 text-[#4F46E5]" />
+                비교표 CSV 내보내기
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setCompareItems([]);
+                  setCompareTable([]);
+                }}
+                className="text-[12px] text-[#DC2626]"
+              >
+                비교 목록 초기화
+              </Button>
+            </div>
           </div>
+
+          {/* Plotly Multi-Curve Overlay Chart */}
+          {compareItems.length > 1 && renderCompareOverlayPlot()}
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[12px] border-collapse">
