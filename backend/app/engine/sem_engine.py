@@ -8,6 +8,8 @@ Principles:
 """
 from __future__ import annotations
 
+from collections import OrderedDict
+import hashlib
 import io
 import math
 from typing import Any
@@ -22,9 +24,43 @@ from skimage.feature import peak_local_max
 from ..config import MAX_IMAGE_PIXELS
 from ..schemas import ROIRect, SEMParams
 
+_GRAY_CACHE: OrderedDict[str, tuple[np.ndarray, str, int | None]] = OrderedDict()
+_PARTICLE_SEG_CACHE: OrderedDict[tuple[Any, ...], tuple[float, np.ndarray, list[dict[str, Any]], bytes]] = OrderedDict()
+_GPM_CACHE: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
 
-def load_sem_grayscale_and_rgb(raw: bytes) -> tuple[np.ndarray, np.ndarray, str]:
-    """Decode JPG/PNG safely, enforce max pixel count, and return (gray_uint8, rgb_uint8, format)."""
+_DISK1_KERNEL = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=np.uint8)
+_LABEL_PALETTE_FLOAT = np.array(
+    [
+        [1.00, 0.00, 0.00],
+        [0.00, 0.50, 1.00],
+        [0.00, 0.80, 0.40],
+        [1.00, 0.65, 0.00],
+        [0.65, 0.30, 0.95],
+        [0.00, 0.75, 0.80],
+        [0.95, 0.30, 0.65],
+        [0.55, 0.80, 0.15],
+        [0.35, 0.40, 0.95],
+        [0.95, 0.45, 0.25],
+    ],
+    dtype=np.float32,
+)
+
+
+def _cache_put(store: OrderedDict[Any, Any], key: Any, value: Any, max_items: int = 24) -> None:
+    store[key] = value
+    store.move_to_end(key)
+    while len(store) > max_items:
+        store.popitem(last=False)
+
+
+def load_sem_grayscale_cached(raw: bytes) -> tuple[np.ndarray, str, int | None, str]:
+    """Decode SEM image to uint8 grayscale with SHA-256 LRU cache and return (gray_u8, fmt, databar_y, sha256)."""
+    sha = hashlib.sha256(raw).hexdigest()
+    cached = _GRAY_CACHE.get(sha)
+    if cached is not None:
+        _GRAY_CACHE.move_to_end(sha)
+        return cached[0], cached[1], cached[2], sha
+
     Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
     try:
         with Image.open(io.BytesIO(raw)) as im:
@@ -36,10 +72,19 @@ def load_sem_grayscale_and_rgb(raw: bytes) -> tuple[np.ndarray, np.ndarray, str]
                 )
             if w < 32 or h < 32:
                 raise ValueError(f"이미지 크기({w}×{h} px)가 너무 작아 분석할 수 없습니다 (최소 32×32 px).")
-            rgb = np.asarray(im.convert("RGB"), dtype=np.uint8)
             gray = np.asarray(im.convert("L"), dtype=np.uint8)
     except (OSError, Image.DecompressionBombError) as exc:
         raise ValueError("SEM 이미지 파일을 읽을 수 없습니다. 손상 여부와 실제 이미지 형식을 확인해주세요.") from exc
+
+    databar_y = detect_info_bar_row(gray)
+    _cache_put(_GRAY_CACHE, sha, (gray, fmt, databar_y), max_items=16)
+    return gray, fmt, databar_y, sha
+
+
+def load_sem_grayscale_and_rgb(raw: bytes) -> tuple[np.ndarray, np.ndarray, str]:
+    """Decode JPG/PNG safely, enforce max pixel count, and return (gray_uint8, rgb_uint8, format)."""
+    gray, fmt, _, _ = load_sem_grayscale_cached(raw)
+    rgb = np.stack([gray, gray, gray], axis=-1)
     return gray, rgb, fmt
 
 
@@ -128,9 +173,8 @@ def detect_scalebar_candidates(gray: np.ndarray, databar_y: int | None) -> list[
 
 def inspect_sem_bytes(raw: bytes) -> dict[str, Any]:
     """Inspect uploaded SEM image: dimensions, info bar, scalebar candidates, and suggested safe ROI."""
-    gray, _, fmt = load_sem_grayscale_and_rgb(raw)
+    gray, fmt, databar_y, _ = load_sem_grayscale_cached(raw)
     h, w = gray.shape
-    databar_y = detect_info_bar_row(gray)
     candidates = detect_scalebar_candidates(gray, databar_y)
     safe_h = databar_y if databar_y is not None else h
     default_roi = {"x": 0, "y": 0, "w": int(w), "h": int(safe_h)}
@@ -237,9 +281,54 @@ def _enhance_roi(roi_gray: np.ndarray, clahe_clip: float, blur_ksize: int) -> np
 
 
 def _encode_png(rgb_arr: np.ndarray) -> bytes:
+    if rgb_arr.ndim == 2:
+        ok, enc = cv2.imencode(".png", rgb_arr, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+    else:
+        bgr = cv2.cvtColor(rgb_arr, cv2.COLOR_RGB2BGR)
+        ok, enc = cv2.imencode(".png", bgr, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+    if ok:
+        return enc.tobytes()
     buf = io.BytesIO()
     Image.fromarray(rgb_arr).save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _render_particle_overlay_fast(
+    roi_gray: np.ndarray,
+    labels: np.ndarray,
+    excluded_set: set[int],
+) -> np.ndarray:
+    """Fast vectorized uint8/float32 overlay renderer producing tint + yellow thin contour for active objects and red contour for excluded objects."""
+    active_labels = labels.copy()
+    excl_mask = np.zeros_like(labels, dtype=bool)
+    if excluded_set:
+        for oid in excluded_set:
+            m = labels == oid
+            if np.any(m):
+                active_labels[m] = 0
+                excl_mask |= m
+
+    base_rgb = np.stack([roi_gray, roi_gray, roi_gray], axis=-1).astype(np.float32)
+    fg = active_labels > 0
+    if np.any(fg):
+        pal_u8 = (_LABEL_PALETTE_FLOAT * 255.0).astype(np.float32)
+        color_idx = (active_labels[fg] - 1) % len(pal_u8)
+        base_rgb[fg] = 0.74 * base_rgb[fg] + 0.26 * pal_u8[color_idx]
+
+        # Fast thin boundary detection via 3x3 min/max difference
+        lbl_u16 = np.clip(active_labels, 0, 65535).astype(np.uint16)
+        eroded = cv2.erode(lbl_u16, _DISK1_KERNEL)
+        bound_mask = fg & (lbl_u16 != eroded)
+        base_rgb[bound_mask] = np.array([250.0, 217.0, 38.0], dtype=np.float32)
+
+    overlay_u8 = np.clip(base_rgb, 0.0, 255.0).astype(np.uint8)
+    if np.any(excl_mask):
+        excl_u8 = excl_mask.astype(np.uint8)
+        excl_bound = (cv2.dilate(excl_u8, _DISK1_KERNEL) != cv2.erode(excl_u8, _DISK1_KERNEL))
+        overlay_u8[excl_mask] = (0.65 * overlay_u8[excl_mask] + 0.35 * np.array([220, 38, 38])).astype(np.uint8)
+        overlay_u8[excl_bound] = np.array([220, 38, 38], dtype=np.uint8)
+
+    return overlay_u8
 
 
 # ---------------- Mode A: Particle Watershed Analysis ---------------- #
@@ -248,55 +337,108 @@ def _run_particle_mode(
     roi_rect: dict[str, int],
     scale_info: dict[str, Any],
     params: SEMParams,
+    image_sha256: str = "",
 ) -> tuple[dict[str, Any], bytes, bytes]:
-    enh = _enhance_roi(roi_gray, params.clahe_clip, params.gaussian_blur)
-    if params.threshold_mode == "manual":
-        th_val = float(params.manual_threshold)
-        binary = enh > th_val
+    seg_cache_key = (
+        image_sha256 or hashlib.sha256(roi_gray.tobytes()).hexdigest(),
+        roi_rect["x"],
+        roi_rect["y"],
+        roi_rect["w"],
+        roi_rect["h"],
+        round(float(params.clahe_clip), 3),
+        int(params.gaussian_blur),
+        params.threshold_mode,
+        int(params.manual_threshold),
+        bool(params.invert_polarity),
+        int(params.min_size_px),
+        round(float(params.split_sensitivity), 4),
+        bool(params.exclude_border),
+    )
+
+    cached_seg = _PARTICLE_SEG_CACHE.get(seg_cache_key)
+    if cached_seg is not None:
+        _PARTICLE_SEG_CACHE.move_to_end(seg_cache_key)
+        th_val, labels, raw_objects_px, roi_png = cached_seg
     else:
-        th_val, mask_u8 = cv2.threshold(enh, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        binary = mask_u8 > 0
+        enh = _enhance_roi(roi_gray, params.clahe_clip, params.gaussian_blur)
+        if params.threshold_mode == "manual":
+            th_val = float(params.manual_threshold)
+            binary = enh > th_val
+        else:
+            th_val, mask_u8 = cv2.threshold(enh, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            binary = mask_u8 > 0
 
-    if params.invert_polarity:
-        binary = ~binary
+        if params.invert_polarity:
+            binary = ~binary
 
-    binary = morphology.remove_small_objects(binary, max_size=max(1, params.min_size_px - 1))
-    binary = ndi.binary_fill_holes(binary)
-    binary = morphology.opening(binary, morphology.disk(1))
+        binary = morphology.remove_small_objects(binary, max_size=max(1, params.min_size_px - 1))
+        binary = ndi.binary_fill_holes(binary)
+        binary = cv2.morphologyEx(
+            binary.astype(np.uint8),
+            cv2.MORPH_OPEN,
+            _DISK1_KERNEL,
+            borderType=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        ) > 0
 
-    dist = ndi.distance_transform_edt(binary)
-    min_dist = max(3, int(round((1.0 - params.split_sensitivity) * 16.0)) + 3)
-    conn_labels = measure.label(binary)
-    coords = peak_local_max(dist, min_distance=min_dist, labels=conn_labels, exclude_border=False)
-    markers = np.zeros_like(dist, dtype=np.int32)
-    if len(coords) > 0:
-        markers[tuple(coords.T)] = np.arange(1, len(coords) + 1, dtype=np.int32)
-    labels = segmentation.watershed(-dist, markers, mask=binary)
+        dist = ndi.distance_transform_edt(binary)
+        min_dist = max(3, int(round((1.0 - params.split_sensitivity) * 16.0)) + 3)
+        conn_labels = measure.label(binary)
+        coords = peak_local_max(dist, min_distance=min_dist, labels=conn_labels, exclude_border=False)
+        markers = np.zeros_like(dist, dtype=np.int32)
+        if len(coords) > 0:
+            markers[tuple(coords.T)] = np.arange(1, len(coords) + 1, dtype=np.int32)
+        labels = segmentation.watershed(-dist, markers, mask=binary)
 
-    if params.exclude_border:
-        labels = segmentation.clear_border(labels)
-    labels = morphology.remove_small_objects(labels, max_size=max(1, params.min_size_px - 1))
-    labels, _, _ = segmentation.relabel_sequential(labels)
+        if params.exclude_border:
+            labels = segmentation.clear_border(labels)
+        labels = morphology.remove_small_objects(labels, max_size=max(1, params.min_size_px - 1))
+        labels, _, _ = segmentation.relabel_sequential(labels)
+
+        props = measure.regionprops(labels)
+        raw_objects_px = []
+        for reg in props:
+            oid = int(reg.label)
+            area_px = float(reg.area)
+            perim_px = max(float(reg.perimeter), 1.0)
+            eq_d_px = float(reg.equivalent_diameter_area)
+            maj_px = max(float(reg.axis_major_length), eq_d_px * 0.5, 1.0)
+            min_px = max(float(reg.axis_minor_length), 1.0)
+            circ = min(1.0, max(0.0, (4.0 * math.pi * area_px) / (perim_px**2)))
+            ar = maj_px / min_px
+            cy_roi, cx_roi = reg.centroid
+            min_r, min_c, max_r, max_c = reg.bbox
+            raw_objects_px.append(
+                {
+                    "object_id": oid,
+                    "cx_roi": float(cx_roi),
+                    "cy_roi": float(cy_roi),
+                    "roi_bbox": [int(min_c), int(min_r), int(max_c), int(max_r)],
+                    "area_px": area_px,
+                    "eq_d_px": eq_d_px,
+                    "maj_px": maj_px,
+                    "min_px": min_px,
+                    "aspect_ratio": round(ar, 3),
+                    "circularity": round(circ, 3),
+                }
+            )
+        roi_png = _encode_png(roi_gray)
+        _cache_put(_PARTICLE_SEG_CACHE, seg_cache_key, (th_val, labels, raw_objects_px, roi_png), max_items=24)
 
     u_per_px = float(scale_info["unit_per_px"])
     disp_unit = scale_info["display_unit"]
     area_unit = scale_info["area_unit"]
     excluded_set = set(params.excluded_object_ids)
 
-    props = measure.regionprops(labels)
     objects_list: list[dict[str, Any]] = []
-
-    for reg in props:
-        oid = int(reg.label)
-        area_px = float(reg.area)
-        perim_px = max(float(reg.perimeter), 1.0)
-        eq_d_px = float(reg.equivalent_diameter_area)
-        maj_px = max(float(reg.axis_major_length), eq_d_px * 0.5, 1.0)
-        min_px = max(float(reg.axis_minor_length), 1.0)
-        circ = min(1.0, max(0.0, (4.0 * math.pi * area_px) / (perim_px**2)))
-        ar = maj_px / min_px
-        cy_roi, cx_roi = reg.centroid
-        min_r, min_c, max_r, max_c = reg.bbox
+    for raw_o in raw_objects_px:
+        oid = raw_o["object_id"]
+        area_px = raw_o["area_px"]
+        eq_d_px = raw_o["eq_d_px"]
+        maj_px = raw_o["maj_px"]
+        min_px = raw_o["min_px"]
+        cx_roi = raw_o["cx_roi"]
+        cy_roi = raw_o["cy_roi"]
 
         objects_list.append(
             {
@@ -306,40 +448,22 @@ def _run_particle_mode(
                 "centroid_y": round(float(roi_rect["y"] + cy_roi), 1),
                 "roi_cx": round(float(cx_roi), 1),
                 "roi_cy": round(float(cy_roi), 1),
-                "roi_bbox": [int(min_c), int(min_r), int(max_c), int(max_r)],
+                "roi_bbox": raw_o["roi_bbox"],
                 "area_px2": round(area_px, 1),
                 "area": round(area_px * (u_per_px**2), 2),
                 "equiv_diameter_px": round(eq_d_px, 2),
                 "equiv_diameter": round(eq_d_px * u_per_px, 2),
                 "major_axis": round(maj_px * u_per_px, 2),
                 "minor_axis": round(min_px * u_per_px, 2),
-                "aspect_ratio": round(ar, 3),
-                "circularity": round(circ, 3),
+                "aspect_ratio": raw_o["aspect_ratio"],
+                "circularity": raw_o["circularity"],
                 "unit": disp_unit,
                 "area_unit": area_unit,
             }
         )
 
-    # Render segmentation overlay (active objects in clear tint + yellow contour; excluded objects in red contour)
-    active_labels = labels.copy()
-    excl_mask = np.zeros_like(labels, dtype=bool)
-    for oid in excluded_set:
-        m = labels == oid
-        if np.any(m):
-            active_labels[m] = 0
-            excl_mask |= m
-
-    rgb_base = color.label2rgb(active_labels, image=roi_gray, alpha=0.26, bg_label=0, image_alpha=1.0)
-    rgb_bound = segmentation.mark_boundaries(rgb_base, active_labels, color=(0.98, 0.85, 0.15), mode="thin")
-    overlay_u8 = (np.clip(rgb_bound, 0.0, 1.0) * 255).astype(np.uint8)
-    if np.any(excl_mask):
-        excl_bound = segmentation.find_boundaries(excl_mask, mode="thick")
-        overlay_u8[excl_mask] = (0.65 * overlay_u8[excl_mask] + 0.35 * np.array([220, 38, 38])).astype(np.uint8)
-        overlay_u8[excl_bound] = np.array([220, 38, 38], dtype=np.uint8)
-
-    roi_rgb_u8 = np.stack([roi_gray, roi_gray, roi_gray], axis=-1)
+    overlay_u8 = _render_particle_overlay_fast(roi_gray, labels, excluded_set)
     overlay_png = _encode_png(overlay_u8)
-    roi_png = _encode_png(roi_rgb_u8)
 
     active_objs = [o for o in objects_list if not o["excluded"]]
     n_active = len(active_objs)
@@ -836,45 +960,88 @@ def compute_grain_phase_map(
 
     raw_candidates: list[dict[str, Any]] = []
     zone_quotas = [("matrix", mask_matrix, 5), ("bright", mask_bright, 4), ("dark", mask_dark, 3)]
+    flat_img_f64 = roi_gray.ravel().astype(np.float64)
 
     for z_key, z_mask, quota in zone_quotas:
-        cleaned = morphology.remove_small_objects(z_mask, max_size=max(4, min_grain_px // 2))
-        cleaned = morphology.opening(cleaned, morphology.disk(1))
-        dist = ndi.distance_transform_edt(cleaned)
-        peak_sep = max(10, int(min(rw, rh) * 0.045))
-        lbl_conn = measure.label(cleaned)
-        coords = peak_local_max(dist, min_distance=peak_sep, labels=lbl_conn, num_peaks=40, exclude_border=False)
-        if len(coords) > 0:
-            markers = np.zeros_like(dist, dtype=np.int32)
-            markers[tuple(coords.T)] = np.arange(1, len(coords) + 1, dtype=np.int32)
-            ws_labels = segmentation.watershed(-dist, markers, mask=cleaned)
-        else:
-            ws_labels = lbl_conn
+        z_u8 = z_mask.astype(np.uint8)
+        cleaned_u8 = cv2.morphologyEx(
+            z_u8,
+            cv2.MORPH_OPEN,
+            _DISK1_KERNEL,
+            borderType=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        n_cc, cc_labels, cc_stats, cc_centroids = cv2.connectedComponentsWithStats(cleaned_u8, connectivity=8)
+        if n_cc <= 1:
+            continue
 
-        props = measure.regionprops(ws_labels, intensity_image=roi_gray)
-        # Sort by area descending, but avoid full-frame background flood by preferring compact grains
-        valid_regs = [
-            reg for reg in props
-            if reg.area >= min_grain_px and reg.area <= total_px * 0.38
-        ]
-        if not valid_regs and props:
-            valid_regs = sorted(props, key=lambda r: r.area, reverse=True)[:quota]
-        else:
-            valid_regs.sort(key=lambda r: r.area, reverse=True)
+        areas_all = cc_stats[1:, cv2.CC_STAT_AREA].astype(np.float64)
+        sum_int_all = np.bincount(cc_labels.ravel(), weights=flat_img_f64, minlength=n_cc)[1:]
+
+        reg_items: list[tuple[float, float, float, tuple[int, int, int, int], float]] = []
+        large_cc_indices: list[int] = []
+
+        for lbl_id in range(1, n_cc):
+            idx0 = lbl_id - 1
+            area_val = float(areas_all[idx0])
+            if area_val < min_grain_px:
+                continue
+            if area_val > total_px * 0.38:
+                large_cc_indices.append(lbl_id)
+                continue
+            x0 = int(cc_stats[lbl_id, cv2.CC_STAT_LEFT])
+            y0 = int(cc_stats[lbl_id, cv2.CC_STAT_TOP])
+            w0 = int(cc_stats[lbl_id, cv2.CC_STAT_WIDTH])
+            h0 = int(cc_stats[lbl_id, cv2.CC_STAT_HEIGHT])
+            cx = float(cc_centroids[lbl_id, 0])
+            cy = float(cc_centroids[lbl_id, 1])
+            mean_i = float(sum_int_all[idx0] / max(area_val, 1.0))
+            reg_items.append((area_val, cy, cx, (y0, x0, y0 + h0, x0 + w0), mean_i))
+
+        # If a continuous matrix (>38% of ROI) dominates and we need more grain markers for this zone,
+        # extract well-separated interior grain centers via fast 4x-strided distance transform peaks
+        if len(reg_items) < quota and large_cc_indices:
+            dist = cv2.distanceTransform(cleaned_u8, cv2.DIST_L2, 3)
+            step = 4
+            dist_sub = dist[::step, ::step]
+            sub_sep = max(3, int(round(min_sep_px / step)))
+            k_sub = np.ones((2 * sub_sep + 1, 2 * sub_sep + 1), dtype=np.uint8)
+            dmax_sub = cv2.dilate(dist_sub, k_sub)
+            p_mask = (dist_sub > 2.0) & (dist_sub >= dmax_sub - 1e-5)
+            py_s, px_s = np.nonzero(p_mask)
+            if len(py_s) > 0:
+                order = np.argsort(dist_sub[py_s, px_s])[::-1]
+                chosen_sub: list[tuple[int, int]] = []
+                for o_idx in order:
+                    sy, sx = int(py_s[o_idx]), int(px_s[o_idx])
+                    if any(math.hypot(sx - cx_p, sy - cy_p) < sub_sep for cy_p, cx_p in chosen_sub):
+                        continue
+                    chosen_sub.append((sy, sx))
+                    ry = min(rh - 1, sy * step)
+                    rx = min(rw - 1, sx * step)
+                    rad = max(6, int(round(float(dist[ry, rx]) * 1.35)))
+                    min_r = max(0, ry - rad)
+                    max_r = min(rh, ry + rad)
+                    min_c = max(0, rx - rad)
+                    max_c = min(rw, rx + rad)
+                    patch_mask = cleaned_u8[min_r:max_r, min_c:max_c] > 0
+                    area_val = float(np.sum(patch_mask))
+                    if area_val >= min_grain_px:
+                        mean_i = float(np.mean(roi_gray[min_r:max_r, min_c:max_c][patch_mask]))
+                        reg_items.append((area_val, float(ry), float(rx), (min_r, min_c, max_r, max_c), mean_i))
+                    if len(chosen_sub) >= quota * 3:
+                        break
+
+        reg_items.sort(key=lambda x: x[0], reverse=True)
 
         picked_for_zone = 0
-        for reg in valid_regs:
-            cy, cx = reg.centroid
+        for area_px, cy, cx, (min_r, min_c, max_r, max_c), mean_i in reg_items:
             if any(math.hypot(cx - prev["roi_x"], cy - prev["roi_y"]) < min_sep_px for prev in raw_candidates):
                 continue
-            min_r, min_c, max_r, max_c = reg.bbox
-            area_px = float(reg.area)
-            eq_d_px = float(reg.equivalent_diameter_area)
-            mean_i = float(reg.mean_intensity)
+            eq_d_px = float(2.0 * math.sqrt(area_px / math.pi))
             z_info = zone_defs[z_key]
             delta_pct = round((mean_i - roi_mean_i) / max(roi_mean_i, 1.0) * 100.0, 1)
 
-            # Refine dark zone label if intensity is extremely dark (< 35 -> pore/void likelihood)
             pred_formula = z_info["predicted_formula"]
             pred_name = z_info["predicted_phase_name"]
             if z_key == "dark" and mean_i < 38.0 and dark_row is not None:
@@ -971,8 +1138,7 @@ def run_sem_pipeline(
     xrd_result: dict[str, Any] | None = None,
     expected_formula: str | None = None,
 ) -> tuple[dict[str, Any], bytes, bytes]:
-    gray, _, fmt = load_sem_grayscale_and_rgb(raw)
-    databar_y = detect_info_bar_row(gray)
+    gray, fmt, databar_y, sha = load_sem_grayscale_cached(raw)
     roi_rect = _resolve_roi(gray, params.roi, databar_y)
     scale_info = _resolve_scale(params)
 
@@ -980,15 +1146,40 @@ def run_sem_pipeline(
     if params.mode == "grain":
         res, ov_png, roi_png = _run_grain_mode(roi_gray, roi_rect, scale_info, params)
     else:
-        res, ov_png, roi_png = _run_particle_mode(roi_gray, roi_rect, scale_info, params)
+        res, ov_png, roi_png = _run_particle_mode(roi_gray, roi_rect, scale_info, params, image_sha256=sha)
 
-    res["grain_phase_map"] = compute_grain_phase_map(
-        roi_gray=roi_gray,
-        roi_rect=roi_rect,
-        scale_info=scale_info,
-        xrd_result=xrd_result,
-        expected_formula=expected_formula,
+    xrd_top_key = ""
+    if xrd_result:
+        cands = (xrd_result.get("phase_matching") or {}).get("candidates") or []
+        xrd_top_key = "|".join(f"{c.get('formula')}:{c.get('z_bse_eff')}" for c in cands[:3])
+
+    gpm_key = (
+        sha,
+        roi_rect["x"],
+        roi_rect["y"],
+        roi_rect["w"],
+        roi_rect["h"],
+        round(float(scale_info["unit_per_px"]), 6),
+        scale_info["display_unit"],
+        expected_formula or "",
+        xrd_top_key,
     )
+    cached_gpm = _GPM_CACHE.get(gpm_key)
+    if cached_gpm is not None:
+        _GPM_CACHE.move_to_end(gpm_key)
+        import copy
+        res["grain_phase_map"] = copy.deepcopy(cached_gpm)
+    else:
+        gpm_out = compute_grain_phase_map(
+            roi_gray=roi_gray,
+            roi_rect=roi_rect,
+            scale_info=scale_info,
+            xrd_result=xrd_result,
+            expected_formula=expected_formula,
+        )
+        import copy
+        _cache_put(_GPM_CACHE, gpm_key, copy.deepcopy(gpm_out), max_items=24)
+        res["grain_phase_map"] = gpm_out
 
     res["image_meta"] = {
         "format": fmt,

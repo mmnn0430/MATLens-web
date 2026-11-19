@@ -205,16 +205,16 @@ export function SemWorkspace({
         </div>
         <div className="space-y-1.5 max-w-lg mx-auto">
           <h2 className="text-[20px] font-bold text-[#191F28]">
-            SEM 미세조직 분석을 시작할 시료를 선택하거나 등록해주세요
+            SEM 미세조직 분석을 시작할 공통 시료를 선택하거나 홈 화면에서 등록해주세요
           </h2>
           <p className="text-[13px] text-[#6B7684] leading-relaxed">
-            상단의 <strong>현재 분석 시료</strong> 선택창에서 시료를 선택한 뒤, 여러 배율(예: 1,000×, 5,000×, 10,000×)의 SEM 이미지를 동시에 업로드하여 이미지별 독립 스케일 보정 및 정량 분석을 수행할 수 있습니다.
+            상단의 <strong>공통 분석 시료</strong> 선택창에서 시료를 선택한 뒤, 여러 배율(예: 1,000×, 5,000×, 10,000×)의 SEM 이미지를 동시에 업로드하여 이미지별 독립 스케일 보정 및 정량 분석을 수행할 수 있습니다.
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
           <Button type="button" variant="primary" onClick={onOpenRegisterModal}>
             <FolderOpen className="w-4 h-4" />
-            <span>새 시료 등록하기</span>
+            <span>홈 화면에서 시료 등록·관리</span>
           </Button>
           <Button
             type="button"
@@ -690,7 +690,40 @@ export function SemWorkspace({
           <div className="text-[18px] font-bold text-[#191F28]">
             SEM 영상 처리 및 미세조직 정량 엔진이 계산 중입니다 (Run #{activeRun.run_number})
           </div>
-          <p className="text-[14px] text-[#6B7684]">{activeRun.stage_message}</p>
+          <p className="text-[14px] text-[#6B7684]">{activeRun.stage_message || "영역 분할 및 입도 통계 계산 중..."}</p>
+          <div className="max-w-md mx-auto w-full bg-[#F2F4F6] h-2.5 rounded-full overflow-hidden">
+            <div
+              className="bg-[#15803D] h-full transition-all duration-300"
+              style={{ width: `${Math.max(10, Math.min(100, activeRun.progress_pct || 35))}%` }}
+            />
+          </div>
+          <div className="text-[12px] font-semibold text-[#15803D] tabular-nums">
+            진행률: {Math.max(10, Math.min(100, activeRun.progress_pct || 35))}% (분석 중 중복 실행 방지됨)
+          </div>
+        </div>
+      )}
+
+      {/* Failed Run Retry Card */}
+      {!isJobRunning && activeRun?.status === "failed" && selectedSemFile && (
+        <div className="rounded-[20px] bg-[#FEF2F2] border border-[#FECACA] p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="text-[16px] font-bold text-[#DC2626]">
+              SEM 이미지 분석 실행 중 오류가 발생했습니다 (Run #{activeRun.run_number})
+            </div>
+            <p className="text-[13px] text-[#991B1B]">
+              {activeRun.error_message || "이미지 처리 또는 API 요청에 실패했습니다. 설정 확인 후 재시도해주세요."}
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            disabled={isBusy || isJobRunning}
+            onClick={() => onStartSemRun(selectedSemFile.id, currentImageParams)}
+          >
+            <Play className="w-4 h-4" />
+            <span>분석 다시 시도 (Retry)</span>
+          </Button>
         </div>
       )}
 

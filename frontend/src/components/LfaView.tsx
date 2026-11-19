@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   AlertCircle,
@@ -6,20 +6,34 @@ import {
   BookOpen,
   CheckCircle2,
   Flame,
+  FolderOpen,
   Info,
   Share2,
   Sparkles,
+  Trash2,
   Upload,
 } from "lucide-react";
 import { api } from "../api";
 import { PlotlyChart } from "./PlotlyChart";
-import type { GroundingData, LfaAnalysisResult, ScientificInterpretation } from "../types";
+import type {
+  GroundingData,
+  LfaAnalysisResult,
+  ProjectDetail,
+  ProjectListItem,
+  SampleInstrumentRecord,
+  ScientificInterpretation,
+} from "../types";
 
 interface LfaViewProps {
+  activeSample?: ProjectDetail | ProjectListItem | null;
+  onRecordSaved?: () => void;
   onNavigateToIntegrated?: () => void;
 }
 
-export function LfaView({ onNavigateToIntegrated }: LfaViewProps = {}) {
+export function LfaView({ activeSample, onRecordSaved, onNavigateToIntegrated }: LfaViewProps = {}) {
+  const [sampleRecords, setSampleRecords] = useState<SampleInstrumentRecord[]>([]);
+  const [activeMeasurementId, setActiveMeasurementId] = useState<string | null>(null);
+  const [uploadedFilename, setUploadedFilename] = useState<string>("lfa_measurement.csv");
   const [rawText, setRawText] = useState<string>("");
   const [thicknessMm, setThicknessMm] = useState<number>(2.5);
   const [densityGCm3, setDensityGCm3] = useState<number | "">(2.6);
@@ -37,6 +51,25 @@ export function LfaView({ onNavigateToIntegrated }: LfaViewProps = {}) {
   const [grounding, setGrounding] = useState<GroundingData | null>(null);
   const [aiReport, setAiReport] = useState<ScientificInterpretation | null>(null);
 
+  const refreshSampleRecords = useCallback(() => {
+    if (!activeSample?.id) {
+      setSampleRecords([]);
+      return;
+    }
+    api
+      .listSampleRecords(activeSample.id, "lfa")
+      .then((res) => setSampleRecords(res.records || []))
+      .catch(() => setSampleRecords([]));
+  }, [activeSample?.id]);
+
+  useEffect(() => {
+    refreshSampleRecords();
+    if (activeSample) {
+      setSampleId(activeSample.sample_code || activeSample.id);
+      setMaterialName(activeSample.expected_formula || activeSample.sample_name);
+    }
+  }, [activeSample, refreshSampleRecords]);
+
   const loadBenchmarkSample = () => {
     // Benchmark Pyroceram 9606 standard (2.50 mm thickness, 2.60 g/cm^3, Cp = 0.82 J/g*K)
     const header = `# MatLens Benchmark Pyroceram 9606 Standard\n# Thickness: 2.50 mm | Density: 2.60 g/cm^3 | Cp: 0.82 J/(g*K)\nTime_s,RearTemperature_C\n`;
@@ -47,13 +80,15 @@ export function LfaView({ onNavigateToIntegrated }: LfaViewProps = {}) {
       "0.800,27.68", "0.900,27.85", "1.000,27.95", "1.200,28.00", "1.500,27.92"
     ];
     setRawText(header + rows.join("\n"));
+    setActiveMeasurementId(null);
+    setUploadedFilename("sample_pyroceram_9606.csv");
     setThicknessMm(2.5);
     setDensityGCm3(2.6);
     setSpecificHeatJGK(0.82);
     setIsLitDensity(false);
     setIsLitCp(false);
-    setSampleId("Pyroceram-Standard");
-    setMaterialName("Pyroceram 9606 Standard");
+    setSampleId(activeSample?.sample_code || "Pyroceram-Standard");
+    setMaterialName(activeSample?.expected_formula || "Pyroceram 9606 Standard");
     setTempC(25);
     setErrorMsg(null);
   };
@@ -61,6 +96,8 @@ export function LfaView({ onNavigateToIntegrated }: LfaViewProps = {}) {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setUploadedFilename(file.name);
+    setActiveMeasurementId(null);
     const reader = new FileReader();
     reader.onload = (evt) => {
       const content = evt.target?.result as string;
@@ -68,6 +105,44 @@ export function LfaView({ onNavigateToIntegrated }: LfaViewProps = {}) {
       setErrorMsg(null);
     };
     reader.readAsText(file);
+  };
+
+  const handleLoadRecord = (rec: SampleInstrumentRecord) => {
+    setActiveMeasurementId(rec.id);
+    setUploadedFilename(rec.original_filename);
+    if (rec.raw_payload) {
+      if (rec.raw_payload.raw_text) setRawText(rec.raw_payload.raw_text);
+      if (rec.raw_payload.thickness_mm) setThicknessMm(rec.raw_payload.thickness_mm);
+      if (rec.raw_payload.density_g_cm3 !== undefined) setDensityGCm3(rec.raw_payload.density_g_cm3);
+      if (rec.raw_payload.specific_heat_J_gK !== undefined) setSpecificHeatJGK(rec.raw_payload.specific_heat_J_gK);
+      if (rec.raw_payload.is_literature_density !== undefined) setIsLitDensity(rec.raw_payload.is_literature_density);
+      if (rec.raw_payload.is_literature_cp !== undefined) setIsLitCp(rec.raw_payload.is_literature_cp);
+      if (rec.raw_payload.sample_id) setSampleId(rec.raw_payload.sample_id);
+      if (rec.raw_payload.material_name) setMaterialName(rec.raw_payload.material_name);
+      if (rec.raw_payload.measurement_temperature_C !== undefined) setTempC(rec.raw_payload.measurement_temperature_C);
+    }
+    const latestAnalysis = rec.analyses?.[0];
+    if (latestAnalysis?.results) {
+      setResult(latestAnalysis.results.calculated_properties || null);
+      setGrounding(latestAnalysis.results.grounding || null);
+      setAiReport(latestAnalysis.results.ai_interpretation || null);
+    }
+  };
+
+  const handleDeleteRecord = async (recId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!activeSample?.id) return;
+    if (!window.confirm("이 LFA 측정 기록을 삭제하시겠습니까?")) return;
+    try {
+      await api.deleteSampleRecord(activeSample.id, recId);
+      if (activeMeasurementId === recId) {
+        setActiveMeasurementId(null);
+      }
+      refreshSampleRecords();
+      onRecordSaved?.();
+    } catch (err: any) {
+      alert("삭제 실패: " + err.message);
+    }
   };
 
   const executeAnalysis = async () => {
@@ -78,6 +153,9 @@ export function LfaView({ onNavigateToIntegrated }: LfaViewProps = {}) {
     setLoading(true);
     setErrorMsg(null);
     try {
+      const effSampleId = activeSample?.sample_code || sampleId;
+      const effMaterialName = activeSample?.expected_formula || materialName;
+
       const resp = await api.runLfaAnalysis({
         raw_text: rawText,
         thickness_mm: thicknessMm,
@@ -85,8 +163,8 @@ export function LfaView({ onNavigateToIntegrated }: LfaViewProps = {}) {
         specific_heat_J_gK: specificHeatJGK === "" ? null : Number(specificHeatJGK),
         is_literature_density: isLitDensity,
         is_literature_cp: isLitCp,
-        sample_id: sampleId,
-        material_name: materialName,
+        sample_id: effSampleId,
+        material_name: effMaterialName,
         measurement_temperature_C: tempC,
         include_ai_interpretation: true,
       });
@@ -99,8 +177,8 @@ export function LfaView({ onNavigateToIntegrated }: LfaViewProps = {}) {
         localStorage.setItem(
           "matlens_shared_lfa_data",
           JSON.stringify({
-            sample_id: sampleId,
-            material_name: materialName,
+            sample_id: effSampleId,
+            material_name: effMaterialName,
             temperature_C: tempC,
             thermal_diffusivity_mm2_s: resp.calculated_properties.thermal_diffusivity_mm2_s,
             thermal_conductivity_W_mK: resp.calculated_properties.thermal_conductivity_W_mK,
@@ -113,6 +191,38 @@ export function LfaView({ onNavigateToIntegrated }: LfaViewProps = {}) {
         );
       } catch (e) {
         console.warn("Failed to persist LFA data to localStorage:", e);
+      }
+
+      if (activeSample?.id) {
+        const calc = resp.calculated_properties;
+        const sumText = `α ${calc.thermal_diffusivity_mm2_s.toFixed(3)} mm²/s · κ ${
+          calc.thermal_conductivity_W_mK != null ? calc.thermal_conductivity_W_mK.toFixed(2) : "-"
+        } W/m·K (t₁/₂=${calc.half_rise_time_s.toFixed(3)}s)`;
+        const saved = await api.saveSampleRecord(activeSample.id, {
+          measurement_id: activeMeasurementId,
+          instrument_type: "lfa",
+          original_filename: uploadedFilename || `lfa_${tempC}C.csv`,
+          metadata: { temperature_C: tempC, thickness_mm: thicknessMm },
+          raw_payload: {
+            raw_text: rawText,
+            thickness_mm: thicknessMm,
+            density_g_cm3: densityGCm3 === "" ? null : Number(densityGCm3),
+            specific_heat_J_gK: specificHeatJGK === "" ? null : Number(specificHeatJGK),
+            is_literature_density: isLitDensity,
+            is_literature_cp: isLitCp,
+            sample_id: effSampleId,
+            material_name: effMaterialName,
+            measurement_temperature_C: tempC,
+          },
+          parameters: { thicknessMm, densityGCm3, specificHeatJGK, tempC },
+          results: resp,
+          summary_text: sumText,
+        });
+        if (saved?.measurement_id) {
+          setActiveMeasurementId(saved.measurement_id);
+        }
+        refreshSampleRecords();
+        onRecordSaved?.();
       }
     } catch (err: any) {
       setErrorMsg(err.message || "LFA 분석 실행에 실패했습니다.");
@@ -210,6 +320,63 @@ export function LfaView({ onNavigateToIntegrated }: LfaViewProps = {}) {
         </div>
       </div>
 
+      {/* Active Sample Linked Measurements */}
+      {activeSample && sampleRecords.length > 0 && (
+        <div className="bg-white px-5 py-3.5 rounded-[16px] border border-[#E5E8EB] flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[13px] font-semibold text-[#191F28]">
+            <FolderOpen className="w-4 h-4 text-[#D97706]" />
+            <span>
+              선택 시료(<strong>{activeSample.sample_name}</strong> · ID: {activeSample.sample_code || activeSample.id})에 연결된 LFA 측정 기록 ({sampleRecords.length}건):
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {sampleRecords.map((rec) => {
+              const latestAnalysis = rec.analyses?.[0];
+              const isCurrent = activeMeasurementId === rec.id;
+              return (
+                <div
+                  key={rec.id}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] text-[12px] font-medium border transition-colors ${
+                    isCurrent
+                      ? "bg-[#FEF3C7] border-[#D97706] text-[#B45309] font-bold"
+                      : "bg-[#F8FAFC] hover:bg-[#FEF3C7]/50 border-[#E5E8EB] text-[#191F28]"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleLoadRecord(rec)}
+                    className="cursor-pointer"
+                  >
+                    📄 {rec.original_filename}
+                    {latestAnalysis?.summary_text ? ` · ${latestAnalysis.summary_text}` : ""}
+                  </button>
+                  <button
+                    type="button"
+                    title="이 측정 기록 삭제"
+                    onClick={(e) => handleDeleteRecord(rec.id, e)}
+                    className="text-[#8B95A1] hover:text-[#DC2626] ml-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+            {activeMeasurementId && (
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveMeasurementId(null);
+                  setUploadedFilename("lfa_measurement.csv");
+                }}
+                className="px-2.5 py-1 rounded-[8px] bg-[#F2F4F6] text-[#4E5968] text-[11px] font-semibold hover:bg-[#E5E8EB] cursor-pointer"
+              >
+                + 새 파일로 추가하기
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {errorMsg && (
         <div className="rounded-[16px] bg-[#FEE2E2] border border-[#FECACA] p-4 text-[13px] text-[#DC2626] flex justify-between items-center">
           <span>{errorMsg}</span>
@@ -229,19 +396,24 @@ export function LfaView({ onNavigateToIntegrated }: LfaViewProps = {}) {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">시료 ID (Sample ID)</label>
+              <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">
+                공통 시료 ID (Sample ID)
+              </label>
               <input
                 type="text"
-                value={sampleId}
+                value={activeSample ? activeSample.sample_code || activeSample.id : sampleId}
+                readOnly={Boolean(activeSample)}
                 onChange={(e) => setSampleId(e.target.value)}
-                className="w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] text-[13px]"
+                className={`w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] text-[13px] font-mono ${
+                  activeSample ? "bg-[#F8FAFC] text-[#B45309] font-bold" : ""
+                }`}
               />
             </div>
             <div>
-              <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">재료명 (Material Name)</label>
+              <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">재료명 / 화학식</label>
               <input
                 type="text"
-                value={materialName}
+                value={activeSample ? activeSample.expected_formula || activeSample.sample_name : materialName}
                 onChange={(e) => setMaterialName(e.target.value)}
                 className="w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] text-[13px]"
               />

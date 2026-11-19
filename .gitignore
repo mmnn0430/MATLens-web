@@ -3,6 +3,7 @@ api_config.txt
 .tools/
 backend/.venv/
 backend/storage/
+backend/storage_backup_*/
 backend/.pytest_cache/
 **/__pycache__/
 *.pyc

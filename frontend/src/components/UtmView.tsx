@@ -4,26 +4,35 @@ import {
   FileSpreadsheet,
   AlertTriangle,
   CheckCircle2,
+  Clock,
   Download,
   Info,
   Sliders,
   Play,
   Activity,
   ArrowRight,
+  Trash2,
 } from "lucide-react";
 import { api } from "../api";
 import type {
+  ProjectDetail,
+  ProjectListItem,
+  SampleInstrumentRecord,
   UTMAnalysisResult,
   UTMParsedData,
 } from "../types";
 import { Button, Card } from "./ui/primitives";
 
 interface UtmViewProps {
+  activeSample?: ProjectDetail | ProjectListItem | null;
+  onRecordSaved?: () => void;
   onNavigateToIntegrated?: () => void;
 }
 
-export function UtmView({ onNavigateToIntegrated }: UtmViewProps = {}) {
+export function UtmView({ activeSample, onRecordSaved, onNavigateToIntegrated }: UtmViewProps = {}) {
   const [, setFile] = useState<File | null>(null);
+  const [sampleRecords, setSampleRecords] = useState<SampleInstrumentRecord[]>([]);
+  const [activeMeasurementId, setActiveMeasurementId] = useState<string | null>(null);
   const [parsedData, setParsedData] = useState<UTMParsedData | null>(null);
   const [analysisResult, setAnalysisResult] = useState<UTMAnalysisResult | null>(null);
   const [analyzedRequest, setAnalyzedRequest] = useState<Parameters<typeof api.analyzeUtm>[0] | null>(null);
@@ -53,9 +62,25 @@ export function UtmView({ onNavigateToIntegrated }: UtmViewProps = {}) {
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  const refreshSampleRecords = useCallback(() => {
+    if (!activeSample?.id) {
+      setSampleRecords([]);
+      return;
+    }
+    api
+      .listSampleRecords(activeSample.id, "utm")
+      .then((res) => setSampleRecords(res.records || []))
+      .catch(() => setSampleRecords([]));
+  }, [activeSample?.id]);
+
+  useEffect(() => {
+    refreshSampleRecords();
+  }, [refreshSampleRecords]);
+
   // Handle file drop / select
   const handleFileChange = async (selectedFile: File) => {
     setFile(selectedFile);
+    setActiveMeasurementId(null);
     setErrorMsg(null);
     setIsParsing(true);
     setAnalysisResult(null);
@@ -66,7 +91,10 @@ export function UtmView({ onNavigateToIntegrated }: UtmViewProps = {}) {
       setParsedData(parsed);
       setStartIndex(0);
       setEndIndex(parsed.row_count);
-      setAnalysisName(selectedFile.name.replace(/\.[^/.]+$/, "") + " 인장시험 분석");
+      const defaultName = activeSample?.sample_name
+        ? `${activeSample.sample_name} — ${selectedFile.name}`
+        : selectedFile.name.replace(/\.[^/.]+$/, "") + " 인장시험 분석";
+      setAnalysisName(defaultName);
 
       // Auto run first analysis
       const request = {
@@ -77,7 +105,7 @@ export function UtmView({ onNavigateToIntegrated }: UtmViewProps = {}) {
         specimen_gauge_L0: useSpecimenDim && Number(specimenL0) > 0 ? Number(specimenL0) : undefined,
         elastic_start_strain_pct: Number.isNaN(parseFloat(elasticStartPct)) ? undefined : parseFloat(elasticStartPct),
         elastic_end_strain_pct: Number.isNaN(parseFloat(elasticEndPct)) ? undefined : parseFloat(elasticEndPct),
-        analysis_name: selectedFile.name,
+        analysis_name: defaultName,
         calc_offset_yield: calcOffsetYield,
       };
       const res = await api.analyzeUtm(request);
@@ -87,7 +115,8 @@ export function UtmView({ onNavigateToIntegrated }: UtmViewProps = {}) {
         localStorage.setItem(
           "matlens_shared_utm_data",
           JSON.stringify({
-            sample_id: selectedFile.name.replace(/\.[^/.]+$/, ""),
+            sample_id: activeSample?.sample_name || selectedFile.name.replace(/\.[^/.]+$/, ""),
+            chemical_composition: activeSample?.expected_formula || "",
             source_file: selectedFile.name,
             tensile_strength_MPa: res.peak_stress?.stress_MPa ?? null,
             yield_strength_MPa: res.offset_yield?.is_valid ? res.offset_yield.yield_stress_MPa : null,
@@ -99,6 +128,30 @@ export function UtmView({ onNavigateToIntegrated }: UtmViewProps = {}) {
         );
       } catch {
         // ignore storage error
+      }
+
+      if (activeSample?.id) {
+        const uts = res.peak_stress?.stress_MPa ?? "-";
+        const eMod = res.elastic_modulus?.is_valid ? res.elastic_modulus.E_GPa : "-";
+        const saved = await api.saveSampleRecord(activeSample.id, {
+          instrument_type: "utm",
+          original_filename: selectedFile.name,
+          metadata: { row_count: parsed.row_count, encoding: parsed.encoding },
+          raw_payload: { parsed_data: parsed, request },
+          parameters: {
+            start_index: 0,
+            end_index: parsed.row_count,
+            elastic_start_strain_pct: request.elastic_start_strain_pct,
+            elastic_end_strain_pct: request.elastic_end_strain_pct,
+          },
+          results: res,
+          summary_text: `UTS ${uts} MPa · E ${eMod} GPa`,
+        });
+        if (saved?.measurement_id) {
+          setActiveMeasurementId(saved.measurement_id);
+        }
+        refreshSampleRecords();
+        onRecordSaved?.();
       }
     } catch (err: any) {
       setErrorMsg(err?.message || "파일 파싱에 실패했습니다.");
@@ -137,7 +190,8 @@ export function UtmView({ onNavigateToIntegrated }: UtmViewProps = {}) {
         localStorage.setItem(
           "matlens_shared_utm_data",
           JSON.stringify({
-            sample_id: analysisName || parsedData.filename || "UTM-Sample",
+            sample_id: activeSample?.sample_name || analysisName || parsedData.filename || "UTM-Sample",
+            chemical_composition: activeSample?.expected_formula || "",
             source_file: parsedData.filename || "UTM 데이터",
             tensile_strength_MPa: res.peak_stress?.stress_MPa ?? null,
             yield_strength_MPa: res.offset_yield?.is_valid ? res.offset_yield.yield_stress_MPa : null,
@@ -149,6 +203,33 @@ export function UtmView({ onNavigateToIntegrated }: UtmViewProps = {}) {
         );
       } catch {
         // ignore storage error
+      }
+
+      if (activeSample?.id) {
+        const uts = res.peak_stress?.stress_MPa ?? "-";
+        const eMod = res.elastic_modulus?.is_valid ? res.elastic_modulus.E_GPa : "-";
+        const saved = await api.saveSampleRecord(activeSample.id, {
+          measurement_id: activeMeasurementId,
+          instrument_type: "utm",
+          original_filename: parsedData.filename || "utm_data.csv",
+          metadata: { row_count: parsedData.row_count, encoding: parsedData.encoding },
+          raw_payload: { parsed_data: parsedData, request },
+          parameters: {
+            start_index: startIndex,
+            end_index: endIndex,
+            specimen_area_A0: a0,
+            specimen_gauge_L0: l0,
+            elastic_start_strain_pct: request.elastic_start_strain_pct,
+            elastic_end_strain_pct: request.elastic_end_strain_pct,
+          },
+          results: res,
+          summary_text: `UTS ${uts} MPa · E ${eMod} GPa`,
+        });
+        if (saved?.measurement_id) {
+          setActiveMeasurementId(saved.measurement_id);
+        }
+        refreshSampleRecords();
+        onRecordSaved?.();
       }
     } catch (err: any) {
       setErrorMsg(err?.message || "분석 계산에 실패했습니다.");
@@ -167,6 +248,12 @@ export function UtmView({ onNavigateToIntegrated }: UtmViewProps = {}) {
     calcOffsetYield,
     analysisName,
     notes,
+    activeSample?.id,
+    activeSample?.sample_name,
+    activeSample?.expected_formula,
+    activeMeasurementId,
+    refreshSampleRecords,
+    onRecordSaved,
   ]);
 
   // Export the parameters that produced the visible result, including dimensions
@@ -446,6 +533,72 @@ export function UtmView({ onNavigateToIntegrated }: UtmViewProps = {}) {
           </div>
         </div>
       </div>
+
+      {/* Saved UTM Records for Active Sample */}
+      {activeSample && sampleRecords.length > 0 && (
+        <div className="bg-white px-5 py-3.5 rounded-[16px] border border-[#E5E8EB] flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[13px] font-semibold text-[#191F28]">
+            <Clock className="w-4 h-4 text-[#3182F6]" />
+            <span>
+              선택 시료(<strong>{activeSample.sample_name}</strong> · ID: {activeSample.sample_code || activeSample.id})에 연결된 UTM 측정 파일 ({sampleRecords.length}건):
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {sampleRecords.map((rec) => {
+              const latestAnalysis = rec.analyses?.[0];
+              const isCurrent = activeMeasurementId === rec.id;
+              return (
+                <div
+                  key={rec.id}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] text-[12px] font-medium border transition-colors ${
+                    isCurrent
+                      ? "bg-[#EFF6FF] border-[#3182F6] text-[#1D4ED8] font-bold"
+                      : "bg-[#F8FAFC] hover:bg-[#EFF6FF]/60 border-[#E5E8EB] text-[#191F28]"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveMeasurementId(rec.id);
+                      if (rec.raw_payload?.parsed_data) {
+                        setParsedData(rec.raw_payload.parsed_data);
+                        setStartIndex(rec.raw_payload.request?.start_index ?? 0);
+                        setEndIndex(rec.raw_payload.request?.end_index ?? rec.raw_payload.parsed_data.row_count);
+                      }
+                      if (rec.raw_payload?.request) {
+                        setAnalyzedRequest(rec.raw_payload.request);
+                      }
+                      if (latestAnalysis?.results) {
+                        setAnalysisResult(latestAnalysis.results as unknown as UTMAnalysisResult);
+                      }
+                      setAnalysisName(`${activeSample.sample_name} — ${rec.original_filename}`);
+                    }}
+                    className="cursor-pointer"
+                  >
+                    📄 {rec.original_filename}
+                    {latestAnalysis?.summary_text ? ` · ${latestAnalysis.summary_text}` : ""}
+                  </button>
+                  <button
+                    type="button"
+                    title="이 측정 기록 삭제"
+                    onClick={async () => {
+                      await api.deleteSampleRecord(activeSample.id, rec.id);
+                      if (activeMeasurementId === rec.id) {
+                        setActiveMeasurementId(null);
+                      }
+                      refreshSampleRecords();
+                      onRecordSaved?.();
+                    }}
+                    className="text-[#8B95A1] hover:text-[#DC2626] ml-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Error Banner */}
       {errorMsg && (

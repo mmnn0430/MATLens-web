@@ -6,7 +6,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from .config import PROJECTS_STORAGE_DIR
+from .config import PROJECTS_STORAGE_DIR, has_gemini_api_key
 from .db import get_conn, new_id, utc_now_iso
 from .engine.ref_library import load_reference_library, parse_user_cif
 from .engine.report_engine import (
@@ -18,7 +18,8 @@ from .engine.sem_engine import run_sem_pipeline
 from .engine.xrd_engine import run_xrd_pipeline
 from .schemas import RunAnalysisRequest
 
-_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="matlens-worker")
+_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="matlens-worker")
+_AI_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="matlens-ai")
 _ACTIVE_FUTURES: dict[str, Future[None]] = {}
 
 
@@ -31,7 +32,7 @@ def _update_run_progress(run_id: str, status: str, pct: int, message: str) -> No
 
 
 def execute_analysis_run_sync(run_id: str, project_id: str, req_dict: dict[str, Any]) -> None:
-    """Execute full XRD + SEM + Rule Summary + optional Gemini AI pipeline for `run_id`."""
+    """Execute XRD / SEM / Rule Summary / optional Gemini AI pipeline for `run_id`."""
     try:
         req = RunAnalysisRequest.model_validate(req_dict)
         _update_run_progress(run_id, "running", 10, "프로젝트 파일 및 기준 라이브러리를 불러오는 중...")
@@ -42,6 +43,15 @@ def execute_analysis_run_sync(run_id: str, project_id: str, req_dict: dict[str, 
                 raise RuntimeError("프로젝트를 찾을 수 없습니다.")
             file_rows = conn.execute(
                 "SELECT * FROM project_files WHERE project_id = ? ORDER BY created_at ASC", (project_id,)
+            ).fetchall()
+            prev_completed_runs = conn.execute(
+                """
+                SELECT xrd_result_json, sem_result_json, overlay_relpath, roi_relpath
+                FROM analysis_runs
+                WHERE project_id = ? AND status = 'completed'
+                ORDER BY run_number DESC LIMIT 10
+                """,
+                (project_id,),
             ).fetchall()
 
         project_meta = {
@@ -58,13 +68,20 @@ def execute_analysis_run_sync(run_id: str, project_id: str, req_dict: dict[str, 
         run_dir = proj_dir / "runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
+        sem_only_requested = bool(req.selected_sem_file_id and not req.selected_xrd_file_id)
+        xrd_only_requested = bool(req.selected_xrd_file_id and not req.selected_sem_file_id)
+
         if req.selected_xrd_file_id:
             xrd_file = next((r for r in file_rows if r["id"] == req.selected_xrd_file_id and r["file_role"] == "xrd"), None)
+        elif sem_only_requested:
+            xrd_file = None
         else:
             xrd_file = next((r for r in reversed(file_rows) if r["file_role"] == "xrd"), None)
 
         if req.selected_sem_file_id:
             sem_file = next((r for r in file_rows if r["id"] == req.selected_sem_file_id and r["file_role"] == "sem"), None)
+        elif xrd_only_requested:
+            sem_file = None
         else:
             sem_file = next((r for r in reversed(file_rows) if r["file_role"] == "sem"), None)
 
@@ -79,6 +96,32 @@ def execute_analysis_run_sync(run_id: str, project_id: str, req_dict: dict[str, 
         roi_rel: str | None = None
         ov_bytes: bytes | None = None
         roi_bytes: bytes | None = None
+
+        # If this is an SEM-only run, reuse the latest completed XRD result for cross-instrument context without re-running XRD
+        if sem_only_requested:
+            for pr in prev_completed_runs:
+                if pr["xrd_result_json"]:
+                    try:
+                        xrd_res = json.loads(pr["xrd_result_json"])
+                        break
+                    except Exception:
+                        pass
+
+        # If this is an XRD-only run, reuse the latest completed SEM result for cross-instrument context without re-running SEM
+        if xrd_only_requested:
+            for pr in prev_completed_runs:
+                if pr["sem_result_json"]:
+                    try:
+                        sem_res = json.loads(pr["sem_result_json"])
+                        overlay_rel = pr["overlay_relpath"]
+                        roi_rel = pr["roi_relpath"]
+                        if overlay_rel and (proj_dir / overlay_rel).exists():
+                            ov_bytes = (proj_dir / overlay_rel).read_bytes()
+                        if roi_rel and (proj_dir / roi_rel).exists():
+                            roi_bytes = (proj_dir / roi_rel).read_bytes()
+                        break
+                    except Exception:
+                        pass
 
         if xrd_file is not None:
             _update_run_progress(run_id, "running", 30, "XRD 배경 보정, 비평활 정량 피크 피팅 및 상 후보 비교 중...")
@@ -148,16 +191,35 @@ def execute_analysis_run_sync(run_id: str, project_id: str, req_dict: dict[str, 
                 ),
             )
 
-        if req.run_ai_interpretation:
+        if req.run_ai_interpretation and has_gemini_api_key():
             _update_run_progress(run_id, "running", 90, "Gemini AI 통합 해석 및 결정립별 상(Phase) 분석 생성 중...")
-            if sem_res is not None:
-                sem_res = generate_grain_phase_ai_interpretation(project_meta, sem_res, xrd_res, roi_bytes)
+            fut_grain = (
+                _AI_EXECUTOR.submit(
+                    generate_grain_phase_ai_interpretation,
+                    project_meta,
+                    sem_res,
+                    xrd_res,
+                    roi_bytes,
+                )
+                if (sem_res is not None and sem_file is not None)
+                else None
+            )
+            fut_report = _AI_EXECUTOR.submit(
+                generate_gemini_interpretation,
+                project_meta,
+                rule_summary,
+                roi_bytes,
+                ov_bytes,
+            )
+
+            if fut_grain is not None:
+                sem_res = fut_grain.result()
                 with get_conn() as conn:
                     conn.execute(
                         "UPDATE analysis_runs SET sem_result_json = ? WHERE id = ?",
                         (json.dumps(sem_res, ensure_ascii=False), run_id),
                     )
-            ai_out = generate_gemini_interpretation(project_meta, rule_summary, roi_bytes, ov_bytes)
+            ai_out = fut_report.result()
             with get_conn() as conn:
                 conn.execute(
                     """
@@ -176,6 +238,30 @@ def execute_analysis_run_sync(run_id: str, project_id: str, req_dict: dict[str, 
                         1 if ai_out["schema_valid"] else 0,
                         json.dumps(ai_out["reference_check"], ensure_ascii=False),
                         json.dumps(ai_out["report"], ensure_ascii=False) if ai_out["report"] else None,
+                        ai_out["error_message"],
+                        ai_out["created_at"],
+                    ),
+                )
+        elif req.run_ai_interpretation and not has_gemini_api_key():
+            ai_out = generate_gemini_interpretation(project_meta, rule_summary, roi_bytes, ov_bytes)
+            with get_conn() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO ai_reports (
+                        id, project_id, run_id, status, model_name, prompt_version,
+                        schema_valid, reference_check_json, report_json, error_message, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        new_id("ai"),
+                        project_id,
+                        run_id,
+                        ai_out["status"],
+                        ai_out["model_name"],
+                        ai_out["prompt_version"],
+                        0,
+                        "{}",
+                        None,
                         ai_out["error_message"],
                         ai_out["created_at"],
                     ),

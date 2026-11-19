@@ -5,15 +5,51 @@ import {
   Edit3,
   FlaskConical,
   FolderPlus,
+  Home,
   Layers,
-  Plus,
   Save,
   X,
 } from "lucide-react";
 import { api } from "../api";
 import type { ProjectDetail, ProjectListItem, SampleInstrumentRecord } from "../types";
-import { PeriodicTablePicker } from "./PeriodicTablePicker";
+import { PERIODIC_ELEMENTS, PeriodicTablePicker } from "./PeriodicTablePicker";
 import { Button, SourceTag } from "./ui/primitives";
+
+const VALID_ELEMENT_SYMBOLS = new Set(PERIODIC_ELEMENTS.map((e) => e.symbol));
+
+function extractElementsFromFormulaInput(formula: string): string[] {
+  const matches = formula.match(/[A-Z][a-z]?/g) || [];
+  const out: string[] = [];
+  for (const sym of matches) {
+    if (VALID_ELEMENT_SYMBOLS.has(sym) && !out.includes(sym)) {
+      out.push(sym);
+    }
+  }
+  return out;
+}
+
+function updateFormulaWithToggledElements(
+  currentFormula: string,
+  prevElems: string[],
+  nextElems: string[]
+): string {
+  const trimmed = currentFormula.trim();
+  const added = nextElems.filter((e) => !prevElems.includes(e));
+  const removed = prevElems.filter((e) => !nextElems.includes(e));
+
+  let updated = trimmed;
+  for (const rem of removed) {
+    const re = new RegExp(`${rem}(?![a-z])\\d*(?:\\.\\d+)?`, "g");
+    updated = updated.replace(re, "");
+  }
+  for (const add of added) {
+    const checkRe = new RegExp(`${add}(?![a-z])`);
+    if (!checkRe.test(updated)) {
+      updated = `${updated}${add}`;
+    }
+  }
+  return updated.trim();
+}
 
 export interface SampleFormPayload {
   sample_name: string;
@@ -50,18 +86,22 @@ export function SampleRegistrationModal({
   const [description, setDescription] = useState("");
   const [selectedElems, setSelectedElems] = useState<string[]>([]);
   const [isSameSample, setIsSameSample] = useState(true);
-  const [showPeriodicTable, setShowPeriodicTable] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     if (initialSample) {
+      const initFormula = initialSample.expected_formula || "";
+      const initElems =
+        initialSample.expected_elements && initialSample.expected_elements.length > 0
+          ? initialSample.expected_elements
+          : extractElementsFromFormulaInput(initFormula);
       setSampleName(initialSample.sample_name || "");
-      setChemicalComposition(initialSample.expected_formula || "");
+      setChemicalComposition(initFormula);
       setSampleCode(initialSample.sample_code || "");
       setProcessingMethod(initialSample.processing_method || "");
       setExperimentMemo(initialSample.experiment_memo || "");
       setDescription(initialSample.description || "");
-      setSelectedElems(initialSample.expected_elements || []);
+      setSelectedElems(initElems);
       setIsSameSample(initialSample.is_same_sample ?? true);
     } else {
       setSampleName("");
@@ -76,6 +116,21 @@ export function SampleRegistrationModal({
   }, [open, initialSample]);
 
   if (!open) return null;
+
+  const handleCompositionInputChange = (val: string) => {
+    setChemicalComposition(val);
+    const parsedElems = extractElementsFromFormulaInput(val);
+    if (parsedElems.length > 0 || val.trim() === "") {
+      setSelectedElems(parsedElems);
+    }
+  };
+
+  const handlePeriodicTableChange = (nextElems: string[]) => {
+    setChemicalComposition((prevFormula) =>
+      updateFormulaWithToggledElements(prevFormula, selectedElems, nextElems)
+    );
+    setSelectedElems(nextElems);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,15 +152,15 @@ export function SampleRegistrationModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-xs p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto"
       role="dialog"
       aria-modal="true"
       aria-labelledby="sample-modal-title"
     >
-      <div className="w-full max-w-2xl rounded-[22px] bg-white border border-[#E5E8EB] shadow-xl overflow-hidden my-8">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#E5E8EB] bg-[#F8FAFC]">
+      <div className="w-full max-w-4xl max-h-[92vh] flex flex-col rounded-[22px] bg-white border border-[#E5E8EB] shadow-xl overflow-hidden my-auto">
+        <div className="flex items-center justify-between px-5 sm:px-6 py-4 border-b border-[#E5E8EB] bg-[#F8FAFC] shrink-0">
           <div className="flex items-center gap-2.5">
-            <span className="w-8 h-8 rounded-[10px] bg-[#3182F6] text-white flex items-center justify-center">
+            <span className="w-8 h-8 rounded-[10px] bg-[#3182F6] text-white flex items-center justify-center shrink-0">
               <FlaskConical className="w-4 h-4" />
             </span>
             <div>
@@ -113,7 +168,7 @@ export function SampleRegistrationModal({
                 {isEditing ? "시료 정보 수정" : "새 시료 등록하기"}
               </h2>
               <p className="text-[12px] text-[#6B7684]">
-                등록된 시료는 XRD, SEM, UTM, Hall, LFA, FT-IR, DSC, TGA 등 모든 분석기기에서 공통으로 선택하여 데이터를 연결할 수 있습니다.
+                홈 화면에서 등록한 시료는 공통 Sample ID로 관리되며, XRD, SEM, UTM, Hall, LFA, FT-IR, DSC, TGA 등 모든 분석기기에서 동일하게 사용됩니다.
               </p>
             </div>
           </div>
@@ -127,7 +182,7 @@ export function SampleRegistrationModal({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+        <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-[13px] font-semibold text-[#191F28] mb-1.5">
@@ -145,13 +200,13 @@ export function SampleRegistrationModal({
 
             <div>
               <label className="block text-[13px] font-semibold text-[#191F28] mb-1.5">
-                재료 조성 (Chemical Composition · 선택)
+                재료 조성 (Chemical Composition · 원소 선택 연동)
               </label>
               <input
                 type="text"
                 value={chemicalComposition}
-                onChange={(e) => setChemicalComposition(e.target.value)}
-                placeholder="예: Nb0.8Ti0.2FeSb, TiO2, Al2O3"
+                onChange={(e) => handleCompositionInputChange(e.target.value)}
+                placeholder="예: Nb0.8Ti0.2FeSb, TiO2, Al2O3 (주기율표 선택과 자동 연동)"
                 className="w-full min-h-[42px] px-3.5 rounded-[12px] border border-[#E5E8EB] text-[14px] focus:outline-none focus:border-[#3182F6]"
               />
             </div>
@@ -160,13 +215,13 @@ export function SampleRegistrationModal({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-[13px] font-semibold text-[#191F28] mb-1.5">
-                시료 코드 (Sample ID · 선택)
+                공통 시료 코드 (Sample ID · 선택)
               </label>
               <input
                 type="text"
                 value={sampleCode}
                 onChange={(e) => setSampleCode(e.target.value)}
-                placeholder="미입력 시 고유 식별자 자동 부여 (예: SMP-2026-01)"
+                placeholder="미입력 시 고유 Sample ID 자동 부여 (예: SMP-2026-01)"
                 className="w-full min-h-[42px] px-3.5 rounded-[12px] border border-[#E5E8EB] text-[14px] font-mono focus:outline-none focus:border-[#3182F6]"
               />
             </div>
@@ -185,52 +240,51 @@ export function SampleRegistrationModal({
             </div>
           </div>
 
-          <div>
-            <label className="block text-[13px] font-semibold text-[#191F28] mb-1.5">
-              측정 또는 실험 메모 (Experiment Memo · 선택)
-            </label>
-            <input
-              type="text"
-              value={experimentMemo}
-              onChange={(e) => setExperimentMemo(e.target.value)}
-              placeholder="예: Cu Kα XRD(10~80°), FE-SEM 1k×/5k×/10k×, 상온 Hall/LFA 측정"
-              className="w-full min-h-[42px] px-3.5 rounded-[12px] border border-[#E5E8EB] text-[14px] focus:outline-none focus:border-[#3182F6]"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[13px] font-semibold text-[#191F28] mb-1.5">
+                측정 또는 실험 메모 (Experiment Memo · 선택)
+              </label>
+              <input
+                type="text"
+                value={experimentMemo}
+                onChange={(e) => setExperimentMemo(e.target.value)}
+                placeholder="예: Cu Kα XRD(10~80°), FE-SEM 1k×/5k×/10k×, 상온 Hall/LFA 측정"
+                className="w-full min-h-[42px] px-3.5 rounded-[12px] border border-[#E5E8EB] text-[14px] focus:outline-none focus:border-[#3182F6]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[13px] font-semibold text-[#191F28] mb-1.5">
+                시료에 대한 추가 설명 (Additional Description · 선택)
+              </label>
+              <input
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="합성 조건, 열처리 이력, 외관 상태 등 AI 해석 참고 설명"
+                className="w-full min-h-[42px] px-3.5 rounded-[12px] border border-[#E5E8EB] text-[14px] focus:outline-none focus:border-[#3182F6]"
+              />
+            </div>
           </div>
 
-          <div>
-            <label className="block text-[13px] font-semibold text-[#191F28] mb-1.5">
-              시료에 대한 추가 설명 (Additional Description · 선택)
-            </label>
-            <textarea
-              rows={2}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="합성 조건, 열처리 이력, 외관 상태 등 AI 해석 및 보고서에 참고할 시료 설명을 입력하세요."
-              className="w-full p-3.5 rounded-[12px] border border-[#E5E8EB] text-[13px] focus:outline-none focus:border-[#3182F6]"
+          {/* Always-expanded Periodic Table for Element Selection */}
+          <div className="pt-1 space-y-1.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[13px] font-semibold text-[#191F28]">
+                구성 원소 주기율표 (원소를 클릭하면 선택·해제되며 재료 조성 입력란에 자동 반영됩니다)
+              </span>
+              <span className="text-[12px] text-[#3182F6] font-semibold">
+                선택된 원소: {selectedElems.length > 0 ? selectedElems.join(", ") : "없음"}
+              </span>
+            </div>
+            <PeriodicTablePicker
+              selectedElements={selectedElems}
+              onChange={handlePeriodicTableChange}
+              defaultExpanded={true}
+              alwaysExpanded={true}
+              compact={true}
             />
-          </div>
-
-          <div className="pt-1">
-            <button
-              type="button"
-              onClick={() => setShowPeriodicTable((v) => !v)}
-              className="text-[12px] font-semibold text-[#3182F6] hover:underline cursor-pointer"
-            >
-              {showPeriodicTable
-                ? "▲ 구성 원소 주기율표 접기"
-                : `▼ 예상 구성 원소 선택 (${selectedElems.length ? selectedElems.join(", ") : "선택 안 됨"})`}
-            </button>
-            {showPeriodicTable && (
-              <div className="mt-2">
-                <PeriodicTablePicker
-                  selectedElements={selectedElems}
-                  onChange={setSelectedElems}
-                  defaultExpanded={true}
-                  compact={true}
-                />
-              </div>
-            )}
           </div>
 
           <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-[#E5E8EB]">
@@ -258,7 +312,7 @@ interface SampleSelectorBarProps {
   activeProject: ProjectDetail | null;
   currentInstrument: "xrd" | "sem" | "utm" | "hall" | "lfa" | "ftir" | "dsc" | "tga" | "integrated";
   onSelectSample: (projectId: string) => void;
-  onOpenRegisterModal: () => void;
+  onNavigateHomeSampleManager: () => void;
   onOpenEditModal: () => void;
   onProjectUpdated?: () => void;
 }
@@ -268,7 +322,7 @@ export function SampleSelectorBar({
   activeProject,
   currentInstrument,
   onSelectSample,
-  onOpenRegisterModal,
+  onNavigateHomeSampleManager,
   onOpenEditModal,
   onProjectUpdated,
 }: SampleSelectorBarProps) {
@@ -288,7 +342,7 @@ export function SampleSelectorBar({
       .listSampleRecords(activeProject.id, currentInstrument)
       .then((res) => setSavedRecords(res.records || []))
       .catch(() => setSavedRecords([]));
-  }, [activeProject?.id, currentInstrument]);
+  }, [activeProject?.id, activeProject?.updated_at, currentInstrument]);
 
   const handleSaveCurrentTabResultToSample = async () => {
     if (!activeProject?.id) return;
@@ -339,11 +393,11 @@ export function SampleSelectorBar({
   return (
     <div className="mb-5 rounded-[18px] bg-white border border-[#E5E8EB] p-4 shadow-[0_1px_3px_rgba(25,31,40,0.03)] space-y-3">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        {/* Left: Sample Dropdown Selector */}
+        {/* Left: Common Sample Dropdown Selector */}
         <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-0">
           <div className="inline-flex items-center gap-1.5 text-[13px] font-bold text-[#191F28] shrink-0">
             <Layers className="w-4 h-4 text-[#3182F6]" />
-            <span>현재 분석 시료:</span>
+            <span>공통 분석 시료:</span>
           </div>
 
           <select
@@ -355,18 +409,21 @@ export function SampleSelectorBar({
             }}
             className="min-h-[40px] px-3.5 py-1.5 rounded-[12px] border border-[#BFDBFE] bg-[#EFF6FF]/50 text-[14px] font-bold text-[#191F28] focus:outline-none focus:border-[#3182F6] max-w-full sm:max-w-[380px] cursor-pointer"
           >
-            <option value="">-- 분석할 시료를 선택하거나 새로 등록하세요 --</option>
+            <option value="">-- 분석할 공통 시료를 선택하세요 (시료 등록은 홈 화면에서 수행) --</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.sample_name}
                 {p.expected_formula ? ` (${p.expected_formula})` : ""}
-                {p.sample_code && p.sample_code !== p.id ? ` [${p.sample_code}]` : ""}
+                {` [ID: ${p.sample_code || p.id}]`}
               </option>
             ))}
           </select>
 
           {activeProject && (
             <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="px-2.5 py-0.5 rounded-full text-[12px] font-mono font-semibold bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE]">
+                Sample ID: {activeProject.sample_code || activeProject.id}
+              </span>
               {activeProject.expected_formula && (
                 <span className="px-2.5 py-0.5 rounded-full text-[12px] font-semibold bg-[#F2F4F6] text-[#4E5968]">
                   조성: {activeProject.expected_formula}
@@ -386,7 +443,7 @@ export function SampleSelectorBar({
         <div className="flex flex-wrap items-center gap-2 shrink-0">
           {nonZeroCounts.length > 0 && (
             <div className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-[10px] bg-[#F7F8FA] border border-[#E5E8EB] text-[11px] font-semibold text-[#4E5968]">
-              <span>시료 보유 데이터:</span>
+              <span>연결된 측정 데이터:</span>
               {nonZeroCounts.map(([inst, cnt]) => (
                 <span
                   key={inst}
@@ -428,12 +485,13 @@ export function SampleSelectorBar({
           <Button
             type="button"
             size="sm"
-            variant="primary"
-            onClick={onOpenRegisterModal}
-            className="min-h-[38px] text-[12px]"
+            variant="outline"
+            onClick={onNavigateHomeSampleManager}
+            className="min-h-[38px] text-[12px] border-[#3182F6] text-[#3182F6] hover:bg-[#EFF6FF]"
+            title="홈 화면의 통합 시료 관리로 이동하여 새 시료를 등록하거나 관리합니다"
           >
-            <Plus className="w-3.5 h-3.5" />
-            <span>시료 등록하기</span>
+            <Home className="w-3.5 h-3.5" />
+            <span>홈에서 시료 등록·관리</span>
           </Button>
         </div>
       </div>

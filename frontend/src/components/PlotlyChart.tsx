@@ -52,14 +52,25 @@ export function PlotlyChart({ data, layout, height = 420, config: userConfig, st
     }
 
     const handleResize = () => {
-      if (containerRef.current) {
+      if (containerRef.current && containerRef.current.offsetWidth > 0) {
         Plotly.Plots.resize(containerRef.current);
       }
     };
     window.addEventListener("resize", handleResize);
 
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => {
+        handleResize();
+      });
+      ro.observe(el);
+    }
+
     return () => {
       window.removeEventListener("resize", handleResize);
+      if (ro) {
+        ro.disconnect();
+      }
       if (plotEl?.removeAllListeners) {
         plotEl.removeAllListeners("plotly_click");
       }

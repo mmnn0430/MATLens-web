@@ -1,23 +1,37 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   BookOpen,
   CheckCircle2,
+  Clock,
   Info,
   Share2,
   Sparkles,
+  Trash2,
   Upload,
   Zap,
 } from "lucide-react";
 import { api } from "../api";
 import { PlotlyChart } from "./PlotlyChart";
-import type { GroundingData, HallAnalysisResult, ScientificInterpretation } from "../types";
+import type {
+  GroundingData,
+  HallAnalysisResult,
+  ProjectDetail,
+  ProjectListItem,
+  SampleInstrumentRecord,
+  ScientificInterpretation,
+} from "../types";
 
 interface HallViewProps {
+  activeSample?: ProjectDetail | ProjectListItem | null;
+  onRecordSaved?: () => void;
   onNavigateToIntegrated?: () => void;
 }
 
-export function HallView({ onNavigateToIntegrated }: HallViewProps = {}) {
+export function HallView({ activeSample, onRecordSaved, onNavigateToIntegrated }: HallViewProps = {}) {
+  const [sampleRecords, setSampleRecords] = useState<SampleInstrumentRecord[]>([]);
+  const [activeMeasurementId, setActiveMeasurementId] = useState<string | null>(null);
+  const [uploadedFilename, setUploadedFilename] = useState<string>("hall_measurement.csv");
   const [rawText, setRawText] = useState<string>("");
   const [thicknessUm, setThicknessUm] = useState<number>(500);
   const [currentMa, setCurrentMa] = useState<number>(10);
@@ -34,6 +48,25 @@ export function HallView({ onNavigateToIntegrated }: HallViewProps = {}) {
   const [result, setResult] = useState<HallAnalysisResult | null>(null);
   const [grounding, setGrounding] = useState<GroundingData | null>(null);
   const [aiReport, setAiReport] = useState<ScientificInterpretation | null>(null);
+
+  const refreshSampleRecords = useCallback(() => {
+    if (!activeSample?.id) {
+      setSampleRecords([]);
+      return;
+    }
+    api
+      .listSampleRecords(activeSample.id, "hall")
+      .then((res) => setSampleRecords(res.records || []))
+      .catch(() => setSampleRecords([]));
+  }, [activeSample?.id]);
+
+  useEffect(() => {
+    refreshSampleRecords();
+    if (activeSample) {
+      setSampleId(activeSample.sample_code || activeSample.id);
+      setMaterialName(activeSample.expected_formula || activeSample.sample_name);
+    }
+  }, [activeSample, refreshSampleRecords]);
 
   const loadBenchmarkSample = () => {
     // Benchmark n-type silicon wafer (500 um thickness, 10 mA, 9.05 Ohm/sq)
@@ -62,11 +95,13 @@ MagneticField_T,TransverseVoltage_mV
 0.90,-10.6670
 1.00,-11.9039`;
     setRawText(benchmarkData);
+    setActiveMeasurementId(null);
+    setUploadedFilename("sample_hall_n_si_wafer.csv");
     setThicknessUm(500);
     setCurrentMa(10);
     setSheetResist(9.05);
-    setSampleId("Si-Wafer-Bench");
-    setMaterialName("Silicon (n-type)");
+    setSampleId(activeSample ? activeSample.sample_code || activeSample.id : "Si-Wafer-Bench");
+    setMaterialName(activeSample ? activeSample.expected_formula || activeSample.sample_name : "Silicon (n-type)");
     setDopant("Phosphorus (P)");
     setTempC(25);
     setErrorMsg(null);
@@ -75,6 +110,8 @@ MagneticField_T,TransverseVoltage_mV
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setActiveMeasurementId(null);
+    setUploadedFilename(file.name);
     const reader = new FileReader();
     reader.onload = (evt) => {
       const content = evt.target?.result as string;
@@ -92,13 +129,15 @@ MagneticField_T,TransverseVoltage_mV
     setLoading(true);
     setErrorMsg(null);
     try {
+      const effSampleId = activeSample ? activeSample.sample_code || activeSample.id : sampleId;
+      const effMaterialName = activeSample?.expected_formula || materialName;
       const resp = await api.runHallAnalysis({
         raw_text: rawText,
         thickness_um: thicknessUm,
         current_mA: currentMa,
         sheet_resistance_Ohm_sq: sheetResist,
-        sample_id: sampleId,
-        material_name: materialName,
+        sample_id: effSampleId,
+        material_name: effMaterialName,
         dopant: dopant,
         measurement_temperature_C: tempC,
         do_antisymmetrization: doAntisym,
@@ -113,8 +152,8 @@ MagneticField_T,TransverseVoltage_mV
         localStorage.setItem(
           "matlens_shared_hall_data",
           JSON.stringify({
-            sample_id: sampleId,
-            material_name: materialName,
+            sample_id: activeSample?.sample_name || effSampleId,
+            material_name: effMaterialName,
             dopant: dopant,
             temperature_C: tempC,
             carrier_concentration_cm3: resp.calculated_properties.carrier_concentration_cm3,
@@ -127,6 +166,36 @@ MagneticField_T,TransverseVoltage_mV
         );
       } catch (e) {
         console.warn("Failed to persist Hall data to localStorage:", e);
+      }
+
+      if (activeSample?.id) {
+        const calc = resp.calculated_properties;
+        const sumText = `${calc.carrier_type?.split(" ")[0] || ""} · σ ${
+          calc.electrical_conductivity_S_cm != null ? calc.electrical_conductivity_S_cm.toFixed(1) : "-"
+        } S/cm · μ ${calc.hall_mobility_cm2_Vs != null ? calc.hall_mobility_cm2_Vs.toFixed(1) : "-"} cm²/Vs`;
+        const saved = await api.saveSampleRecord(activeSample.id, {
+          measurement_id: activeMeasurementId,
+          instrument_type: "hall",
+          original_filename: uploadedFilename || `hall_${tempC}C.csv`,
+          metadata: { temperature_C: tempC, dopant },
+          raw_payload: {
+            raw_text: rawText,
+            thickness_um: thicknessUm,
+            current_mA: currentMa,
+            sheet_resistance_Ohm_sq: sheetResist,
+            dopant,
+            tempC,
+            doAntisym,
+          },
+          parameters: { thicknessUm, currentMa, sheetResist, tempC, doAntisym },
+          results: resp,
+          summary_text: sumText,
+        });
+        if (saved?.measurement_id) {
+          setActiveMeasurementId(saved.measurement_id);
+        }
+        refreshSampleRecords();
+        onRecordSaved?.();
       }
     } catch (err: any) {
       setErrorMsg(err.message || "Hall 분석 실행에 실패했습니다.");
@@ -221,6 +290,75 @@ MagneticField_T,TransverseVoltage_mV
         </div>
       </div>
 
+      {/* Saved Hall Records for Active Sample */}
+      {activeSample && sampleRecords.length > 0 && (
+        <div className="bg-white px-5 py-3.5 rounded-[16px] border border-[#E5E8EB] flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[13px] font-semibold text-[#191F28]">
+            <Clock className="w-4 h-4 text-[#2563EB]" />
+            <span>
+              선택 시료(<strong>{activeSample.sample_name}</strong> · ID: {activeSample.sample_code || activeSample.id})에 연결된 Hall 측정 기록 ({sampleRecords.length}건):
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {sampleRecords.map((rec) => {
+              const latestAnalysis = rec.analyses?.[0];
+              const isCurrent = activeMeasurementId === rec.id;
+              return (
+                <div
+                  key={rec.id}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] text-[12px] font-medium border transition-colors ${
+                    isCurrent
+                      ? "bg-[#EFF6FF] border-[#2563EB] text-[#1D4ED8] font-bold"
+                      : "bg-[#F8FAFC] hover:bg-[#EFF6FF]/60 border-[#E5E8EB] text-[#191F28]"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveMeasurementId(rec.id);
+                      setUploadedFilename(rec.original_filename);
+                      if (rec.raw_payload) {
+                        if (rec.raw_payload.raw_text) setRawText(rec.raw_payload.raw_text);
+                        if (rec.raw_payload.thickness_um != null) setThicknessUm(rec.raw_payload.thickness_um);
+                        if (rec.raw_payload.current_mA != null) setCurrentMa(rec.raw_payload.current_mA);
+                        if (rec.raw_payload.sheet_resistance_Ohm_sq != null)
+                          setSheetResist(rec.raw_payload.sheet_resistance_Ohm_sq);
+                        if (rec.raw_payload.dopant) setDopant(rec.raw_payload.dopant);
+                        if (rec.raw_payload.tempC != null) setTempC(rec.raw_payload.tempC);
+                      }
+                      if (latestAnalysis?.results?.calculated_properties) {
+                        setResult(latestAnalysis.results.calculated_properties);
+                        setGrounding(latestAnalysis.results.grounding || null);
+                        setAiReport(latestAnalysis.results.ai_interpretation || null);
+                      }
+                    }}
+                    className="cursor-pointer"
+                  >
+                    📄 {rec.original_filename}
+                    {latestAnalysis?.summary_text ? ` · ${latestAnalysis.summary_text}` : ""}
+                  </button>
+                  <button
+                    type="button"
+                    title="이 측정 기록 삭제"
+                    onClick={async () => {
+                      await api.deleteSampleRecord(activeSample.id, rec.id);
+                      if (activeMeasurementId === rec.id) {
+                        setActiveMeasurementId(null);
+                      }
+                      refreshSampleRecords();
+                      onRecordSaved?.();
+                    }}
+                    className="text-[#8B95A1] hover:text-[#DC2626] ml-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {errorMsg && (
         <div className="rounded-[16px] bg-[#FEE2E2] border border-[#FECACA] p-4 text-[13px] text-[#DC2626] flex justify-between items-center">
           <span>{errorMsg}</span>
@@ -240,16 +378,21 @@ MagneticField_T,TransverseVoltage_mV
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">시료 ID (Sample ID)</label>
+              <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">
+                공통 시료 ID (Sample ID)
+              </label>
               <input
                 type="text"
-                value={sampleId}
+                value={activeSample ? activeSample.sample_code || activeSample.id : sampleId}
+                readOnly={Boolean(activeSample)}
                 onChange={(e) => setSampleId(e.target.value)}
-                className="w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] text-[13px]"
+                className={`w-full px-3 py-2 rounded-[10px] border border-[#E5E8EB] text-[13px] font-mono ${
+                  activeSample ? "bg-[#F8FAFC] text-[#1D4ED8] font-bold" : ""
+                }`}
               />
             </div>
             <div>
-              <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">재료명 (Material Name)</label>
+              <label className="block text-[12px] font-semibold text-[#4E5968] mb-1">재료명 · 조성 (Material)</label>
               <input
                 type="text"
                 value={materialName}

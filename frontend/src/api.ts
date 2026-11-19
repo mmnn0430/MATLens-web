@@ -174,6 +174,7 @@ export const api = {
   saveSampleRecord: (
     projectId: string,
     payload: {
+      measurement_id?: string | null;
       instrument_type: string;
       original_filename: string;
       metadata?: Record<string, any>;

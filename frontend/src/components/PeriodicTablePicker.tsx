@@ -131,6 +131,7 @@ interface PeriodicTablePickerProps {
   selectedElements: string[];
   onChange: (nextElements: string[]) => void;
   defaultExpanded?: boolean;
+  alwaysExpanded?: boolean;
   compact?: boolean;
 }
 
@@ -138,9 +139,11 @@ export function PeriodicTablePicker({
   selectedElements,
   onChange,
   defaultExpanded = true,
+  alwaysExpanded = false,
 }: PeriodicTablePickerProps) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [expanded, setExpanded] = useState(alwaysExpanded || defaultExpanded);
   const [hoveredEl, setHoveredEl] = useState<ElementDef | null>(null);
+  const isExpanded = alwaysExpanded ? true : expanded;
 
   const toggleElement = (sym: string) => {
     if (selectedElements.includes(sym)) {
@@ -198,25 +201,27 @@ export function PeriodicTablePicker({
           )}
         </div>
 
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="inline-flex items-center gap-1 text-[12px] font-semibold text-[#3182F6] bg-white px-2.5 py-1.5 rounded-[10px] border border-[#E5E8EB] hover:border-[#3182F6] cursor-pointer shrink-0"
-        >
-          {expanded ? (
-            <>
-              주기율표 접기 <ChevronUp className="w-3.5 h-3.5" />
-            </>
-          ) : (
-            <>
-              주기율표 펼치기 <ChevronDown className="w-3.5 h-3.5" />
-            </>
-          )}
-        </button>
+        {!alwaysExpanded && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="inline-flex items-center gap-1 text-[12px] font-semibold text-[#3182F6] bg-white px-2.5 py-1.5 rounded-[10px] border border-[#E5E8EB] hover:border-[#3182F6] cursor-pointer shrink-0"
+          >
+            {isExpanded ? (
+              <>
+                주기율표 접기 <ChevronUp className="w-3.5 h-3.5" />
+              </>
+            ) : (
+              <>
+                주기율표 펼치기 <ChevronDown className="w-3.5 h-3.5" />
+              </>
+            )}
+          </button>
+        )}
       </div>
 
       {/* Hovered Element Info */}
-      {expanded && (
+      {isExpanded && (
         <>
           <div className="flex flex-wrap items-center justify-end gap-2 pt-0.5">
             <div className="text-[12px] text-[#6B7684] min-h-[20px]">
@@ -232,9 +237,9 @@ export function PeriodicTablePicker({
           </div>
 
           {/* 18-Column Full-Width Periodic Table Grid */}
-          <div className="w-full pb-1">
+          <div className="w-full overflow-x-auto pb-1">
             <div
-              className="grid gap-1 w-full"
+              className="grid gap-1 w-full min-w-[620px]"
               style={{ gridTemplateColumns: "repeat(18, minmax(0, 1fr))" }}
             >
               {[1, 2, 3, 4, 5, 6, 7].map((row) =>

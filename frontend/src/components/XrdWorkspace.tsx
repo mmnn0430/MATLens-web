@@ -88,8 +88,8 @@ export function XrdWorkspace({
   const [seriesCurves, setSeriesCurves] = useState<XrdSeriesCurveItem[]>([]);
   const [loadingSeries, setLoadingSeries] = useState(false);
   const [visibleFileIds, setVisibleFileIds] = useState<Record<string, boolean>>({});
-  const [yOffsetStep, setYOffsetStep] = useState<number>(80);
-  const [normOverlay, setNormOverlay] = useState<boolean>(true);
+  const [yOffsetStep, setYOffsetStep] = useState<number>(0);
+  const [normOverlay, setNormOverlay] = useState<boolean>(false);
   const [dragActive, setDragActive] = useState(false);
   const [showSetupDrawer, setShowSetupDrawer] = useState(true);
   const [desktopFiles, setDesktopFiles] = useState<DesktopFileInfo[]>([]);
@@ -98,6 +98,10 @@ export function XrdWorkspace({
   const xrdFiles = useMemo(
     () => (activeProject?.files || []).filter((f) => f.file_role === "xrd"),
     [activeProject?.files]
+  );
+  const xrdFilesKey = useMemo(
+    () => xrdFiles.map((f) => `${f.id}:${f.sha256}`).join("|"),
+    [xrdFiles]
   );
   const cifFiles = useMemo(
     () => (activeProject?.files || []).filter((f) => f.file_role === "cif"),
@@ -132,6 +136,14 @@ export function XrdWorkspace({
     [xrdFiles, selectedFileId]
   );
 
+  const selectedRawCurve = useMemo(
+    () =>
+      seriesCurves.find((c) => c.file_id === selectedXrdFile?.id) ||
+      seriesCurves[seriesCurves.length - 1] ||
+      null,
+    [seriesCurves, selectedXrdFile?.id]
+  );
+
   // Fetch multi-file XRD curves for Overlay Mode & quick preview
   const fetchXrdSeries = useCallback(() => {
     if (!activeProject?.id || xrdFiles.length === 0) {
@@ -156,7 +168,7 @@ export function XrdWorkspace({
       })
       .catch(() => {})
       .finally(() => setLoadingSeries(false));
-  }, [activeProject?.id, xrdFiles.length]);
+  }, [activeProject?.id, xrdFiles.length, xrdFilesKey]);
 
   useEffect(() => {
     fetchXrdSeries();
@@ -191,48 +203,115 @@ export function XrdWorkspace({
 
   // Build Plotly traces for Overlay Mode & Individual Raw Preview
   const overlayPlot = useMemo(() => {
-    const activeCurves = seriesCurves.filter((c) => visibleFileIds[c.file_id] !== false);
+    const activeCurves = seriesCurves.filter(
+      (c) => visibleFileIds[c.file_id] !== false && c.two_theta.length > 0
+    );
+    const filenameCounts: Record<string, number> = {};
+    for (const c of activeCurves) {
+      filenameCounts[c.filename] = (filenameCounts[c.filename] || 0) + 1;
+    }
+
     const traces = activeCurves.map((c, idx) => {
       const baseArr = normOverlay ? c.intensity_norm : c.intensity_raw;
       const offsetVal = idx * yOffsetStep;
-      const yArr = baseArr.map((v) => v + offsetVal);
+      const yArr = offsetVal === 0 ? baseArr : baseArr.map((v) => v + offsetVal);
       const color = OVERLAY_PALETTE[c.order_index % OVERLAY_PALETTE.length];
+      const hasDupName = (filenameCounts[c.filename] || 0) > 1;
+      const traceName = `${hasDupName ? `[#${c.order_index + 1}] ` : ""}${c.filename}${
+        c.primary_phase ? ` (${c.primary_phase})` : ""
+      }`;
+      const isRawExact = !normOverlay && offsetVal === 0;
       return {
+        uid: c.file_id,
         x: c.two_theta,
         y: yArr,
+        customdata: c.intensity_raw,
         type: "scatter",
         mode: "lines",
-        name: `${c.filename}${c.primary_phase ? ` (${c.primary_phase})` : ""}`,
+        name: traceName,
         line: { color, width: 1.9 },
-        hovertemplate: `<b>${c.filename}</b><br>2θ: %{x:.2f}°<br>Intensity: %{y:.1f}<extra></extra>`,
+        hovertemplate: isRawExact
+          ? `<b>${c.filename}</b><br>2θ: %{x:.4f}°<br>원본 Intensity: %{customdata:.2f}<extra></extra>`
+          : `<b>${c.filename}</b><br>2θ: %{x:.4f}°<br>원본 Intensity: %{customdata:.2f}<br>변환 표시값: %{y:.2f}<extra></extra>`,
       };
     });
 
+    const isRawMode = !normOverlay && yOffsetStep === 0;
+    const yAxisTitle = isRawMode
+      ? "Intensity (원본 측정값 · counts / CPS)"
+      : normOverlay
+      ? `Normalized Intensity (Max=100${yOffsetStep > 0 ? `, Offset +${yOffsetStep}` : ""})`
+      : `Raw Intensity (Offset +${yOffsetStep})`;
+
     const layout = {
       title: {
-        text: `${activeProject?.sample_name || "시료"} — 다중 XRD 회절 패턴 중첩 비교 (${activeCurves.length}개 파일)`,
+        text: `${activeProject?.sample_name || "시료"} — 다중 XRD 회절 패턴 중첩 비교 (${activeCurves.length}개 데이터셋 · ${
+          isRawMode ? "원본 측정 수치" : "시각화 보조 변환 적용"
+        })`,
         font: { size: 15, color: "#191F28" },
       },
       xaxis: {
-        title: "2θ (deg)",
+        title: { text: "2θ (degree)" },
         gridcolor: "#F2F4F6",
         zeroline: false,
       },
       yaxis: {
-        title: normOverlay
-          ? `Normalized Intensity (Max=100, Offset +${yOffsetStep})`
-          : `Raw Intensity (CPS, Offset +${yOffsetStep})`,
+        title: { text: yAxisTitle },
         gridcolor: "#F2F4F6",
         zeroline: false,
       },
       legend: { orientation: "h", y: 1.12, x: 0 },
-      margin: { t: 55, r: 25, b: 55, l: 65 },
+      hovermode: "closest",
+      margin: { t: 55, r: 25, b: 55, l: 70 },
       paper_bgcolor: "#FFFFFF",
       plot_bgcolor: "#FAFAFA",
     };
 
-    return { traces, layout };
+    return { traces, layout, isRawMode };
   }, [seriesCurves, visibleFileIds, normOverlay, yOffsetStep, activeProject?.sample_name]);
+
+  // Individual Raw Preview Plot for newly uploaded file before full Run execution
+  const individualPreviewPlot = useMemo(() => {
+    if (!selectedRawCurve || selectedRawCurve.two_theta.length === 0) return null;
+    const color = OVERLAY_PALETTE[selectedRawCurve.order_index % OVERLAY_PALETTE.length];
+    const traces: any[] = [
+      {
+        uid: `preview-${selectedRawCurve.file_id}`,
+        x: selectedRawCurve.two_theta,
+        y: selectedRawCurve.intensity_raw,
+        type: "scatter",
+        mode: "lines",
+        name: `${selectedRawCurve.filename} [원본 측정값]`,
+        line: { color, width: 1.8 },
+        hovertemplate: `<b>${selectedRawCurve.filename}</b><br>2θ: %{x:.4f}°<br>원본 Intensity: %{y:.2f}<extra></extra>`,
+      },
+    ];
+    if (
+      selectedRawCurve.max_two_theta_raw != null &&
+      selectedRawCurve.max_intensity_raw != null
+    ) {
+      traces.push({
+        x: [selectedRawCurve.max_two_theta_raw],
+        y: [selectedRawCurve.max_intensity_raw],
+        type: "scatter",
+        mode: "markers",
+        name: `최대 강도 피크 (${selectedRawCurve.max_two_theta_raw.toFixed(3)}°, I=${selectedRawCurve.max_intensity_raw.toFixed(1)})`,
+        marker: { color: "#DC2626", size: 8, symbol: "circle" },
+      });
+    }
+    const layout = {
+      title: {
+        text: `${selectedRawCurve.filename} — 원본 XRD 측정 데이터 그래프 (${selectedRawCurve.two_theta.length} points)`,
+        font: { size: 14, color: "#191F28" },
+      },
+      xaxis: { title: { text: "2θ (degree)" }, gridcolor: "#F2F4F6", zeroline: false },
+      yaxis: { title: { text: "Intensity (counts / 원본 단위)" }, gridcolor: "#F2F4F6", zeroline: false },
+      legend: { orientation: "h", y: 1.12, x: 0 },
+      hovermode: "closest",
+      margin: { t: 50, r: 25, b: 50, l: 70 },
+    };
+    return { traces, layout };
+  }, [selectedRawCurve]);
 
   // Check if activeRun matches the currently selected XRD file
   const activeRunMatchesSelectedFile = Boolean(
@@ -253,16 +332,16 @@ export function XrdWorkspace({
         </div>
         <div className="space-y-1.5 max-w-lg mx-auto">
           <h2 className="text-[20px] font-bold text-[#191F28]">
-            XRD 회절 분석을 시작할 시료를 선택하거나 등록해주세요
+            XRD 회절 분석을 시작할 공통 시료를 선택하거나 홈 화면에서 등록해주세요
           </h2>
           <p className="text-[13px] text-[#6B7684] leading-relaxed">
-            상단의 <strong>현재 분석 시료</strong> 선택창에서 기존 시료를 선택하거나, 새 시료를 등록한 뒤 여러 개의 XRD 데이터 파일을 한 번에 업로드하여 개별·중첩 분석을 수행할 수 있습니다.
+            상단의 <strong>공통 분석 시료</strong> 선택창에서 기존 시료를 선택하거나, 홈 화면 통합 시료 관리에서 새 시료를 등록한 뒤 여러 개의 XRD 데이터 파일을 업로드하여 개별·중첩 분석을 수행할 수 있습니다.
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
           <Button type="button" variant="primary" onClick={onOpenRegisterModal}>
             <FolderOpen className="w-4 h-4" />
-            <span>새 시료 등록하기</span>
+            <span>홈 화면에서 시료 등록·관리</span>
           </Button>
           <Button type="button" variant="secondary" disabled={isBusy} onClick={() => onLoadSample("tio2_powder")}>
             <Sparkles className="w-4 h-4 text-[#3182F6]" />
@@ -703,12 +782,24 @@ export function XrdWorkspace({
         <Card className="space-y-5">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-[#E5E8EB]">
             <div>
-              <h3 className="text-[17px] font-bold text-[#191F28] flex items-center gap-2">
-                <Layers className="w-5 h-5 text-[#3182F6]" />
-                다중 XRD 회절 패턴 중첩 비교 (Overlay Mode)
-              </h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-[17px] font-bold text-[#191F28] flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-[#3182F6]" />
+                  다중 XRD 회절 패턴 중첩 비교 (Overlay Mode)
+                </h3>
+                {overlayPlot.isRawMode ? (
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0]">
+                    원본 측정 데이터 표시 중 (보간·정규화·평활화 미적용)
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#FEF3C7] text-[#B45309] border border-[#FDE68A]">
+                    시각화 변환 적용됨 ({normOverlay ? "최대강도 100 정규화" : "원본 강도"}
+                    {yOffsetStep > 0 ? ` · Y-Offset +${yOffsetStep}` : ""}) — 원본 데이터와 구분
+                  </span>
+                )}
+              </div>
               <p className="text-[12px] text-[#6B7684] mt-0.5">
-                동일한 2θ 축 위에서 여러 XRD 데이터를 중첩하여 피크 위치 이동(Shift)과 상대 강도 변화를 비교합니다.
+                동일한 2θ 축 위에서 업로드된 모든 XRD 데이터를 보간·평활화 없이 중첩 표시합니다. 마우스를 올리면 각 지점의 정확한 원본 측정값(2θ, Raw Intensity)을 확인할 수 있습니다.
               </p>
             </div>
 
@@ -736,8 +827,21 @@ export function XrdWorkspace({
                   onChange={(e) => setNormOverlay(e.target.checked)}
                   className="rounded accent-[#3182F6]"
                 />
-                <span>최대강도 100 정규화</span>
+                <span>최대강도 100 정규화 (보조 비교용)</span>
               </label>
+
+              {!overlayPlot.isRawMode && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNormOverlay(false);
+                    setYOffsetStep(0);
+                  }}
+                  className="px-2.5 py-1 rounded-[8px] text-[11px] font-bold bg-white border border-[#BFDBFE] text-[#3182F6] hover:bg-[#EFF6FF] cursor-pointer"
+                >
+                  원본 측정 수치로 복원
+                </button>
+              )}
             </div>
           </div>
 
@@ -789,59 +893,78 @@ export function XrdWorkspace({
             </div>
           )}
 
-          {/* File-by-File Peak & Phase Summary Table */}
+          {/* File-by-File Peak & Quantitative Accuracy Verification Table */}
           {seriesCurves.length > 0 && (
             <div className="overflow-x-auto pt-2">
               <table className="w-full text-left text-[13px] border-collapse">
                 <thead>
                   <tr className="border-b border-[#E5E8EB] bg-[#F7F8FA] text-[#6B7684]">
                     <th className="py-2.5 px-3">파일명</th>
+                    <th className="py-2.5 px-3">데이터 점 수</th>
                     <th className="py-2.5 px-3">2θ 측정 범위</th>
-                    <th className="py-2.5 px-3">검출 피크 수</th>
+                    <th className="py-2.5 px-3">원본 주피크 위치 (2θ_max)</th>
+                    <th className="py-2.5 px-3">원본 최대 강도 (I_max)</th>
                     <th className="py-2.5 px-3">1순위 동정 결정상</th>
-                    <th className="py-2.5 px-3">Scherrer 평균 결정자 크기</th>
+                    <th className="py-2.5 px-3">Scherrer 결정자 크기</th>
                     <th className="py-2.5 px-3 text-right">개별 분석</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#F2F4F6]">
-                  {seriesCurves.map((c) => (
-                    <tr key={c.file_id} className="hover:bg-[#F8FAFC]">
-                      <td className="py-2.5 px-3 font-bold text-[#191F28]">{c.filename}</td>
-                      <td className="py-2.5 px-3 tabular-nums text-[#4E5968]">
-                        {c.two_theta.length > 0
-                          ? `${c.two_theta[0].toFixed(1)}° – ${c.two_theta[c.two_theta.length - 1].toFixed(1)}°`
-                          : "-"}
-                      </td>
-                      <td className="py-2.5 px-3 tabular-nums">
-                        {c.latest_run_id ? `${c.peak_count}개` : "미실행"}
-                      </td>
-                      <td className="py-2.5 px-3 font-medium text-[#1D4ED8]">
-                        {c.primary_phase
-                          ? `${c.primary_phase} (${c.primary_formula || ""})`
-                          : "분석 실행 필요"}
-                      </td>
-                      <td className="py-2.5 px-3 tabular-nums">
-                        {c.scherrer_mean_nm != null ? `${Number(c.scherrer_mean_nm).toFixed(1)} nm` : "-"}
-                      </td>
-                      <td className="py-2.5 px-3 text-right">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={async () => {
-                            await handleSelectXrdFile(c.file_id);
-                            setGraphMode("individual");
-                            if (!c.latest_run_id) {
-                              await onStartXrdRun(c.file_id);
-                            }
-                          }}
-                          className="min-h-[34px] px-3 text-[12px]"
-                        >
-                          {c.latest_run_id ? "개별 결과 보기" : "정밀 분석 실행"}
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
+                  {seriesCurves.map((c) => {
+                    const color = OVERLAY_PALETTE[c.order_index % OVERLAY_PALETTE.length];
+                    return (
+                      <tr key={c.file_id} className="hover:bg-[#F8FAFC]">
+                        <td className="py-2.5 px-3 font-bold text-[#191F28]">
+                          <span className="inline-flex items-center gap-2">
+                            <span
+                              className="w-2.5 h-2.5 rounded-full shrink-0"
+                              style={{ backgroundColor: color }}
+                            />
+                            <span>{c.filename}</span>
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 tabular-nums text-[#4E5968]">
+                          {c.two_theta.length.toLocaleString()} pts
+                        </td>
+                        <td className="py-2.5 px-3 tabular-nums text-[#4E5968]">
+                          {c.two_theta.length > 0
+                            ? `${c.two_theta[0].toFixed(2)}° – ${c.two_theta[c.two_theta.length - 1].toFixed(2)}°`
+                            : "-"}
+                        </td>
+                        <td className="py-2.5 px-3 tabular-nums font-semibold text-[#191F28]">
+                          {c.max_two_theta_raw != null ? `${c.max_two_theta_raw.toFixed(4)}°` : "-"}
+                        </td>
+                        <td className="py-2.5 px-3 tabular-nums font-semibold text-[#191F28]">
+                          {c.max_intensity_raw != null ? c.max_intensity_raw.toFixed(2) : "-"}
+                        </td>
+                        <td className="py-2.5 px-3 font-medium text-[#1D4ED8]">
+                          {c.primary_phase
+                            ? `${c.primary_phase} (${c.primary_formula || ""})`
+                            : "정밀 분석 시 동정"}
+                        </td>
+                        <td className="py-2.5 px-3 tabular-nums">
+                          {c.scherrer_mean_nm != null ? `${Number(c.scherrer_mean_nm).toFixed(1)} nm` : "-"}
+                        </td>
+                        <td className="py-2.5 px-3 text-right">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={async () => {
+                              await handleSelectXrdFile(c.file_id);
+                              setGraphMode("individual");
+                              if (!c.latest_run_id) {
+                                await onStartXrdRun(c.file_id);
+                              }
+                            }}
+                            className="min-h-[34px] px-3 text-[12px]"
+                          >
+                            {c.latest_run_id ? "개별 결과 보기" : "정밀 분석 실행"}
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -870,27 +993,52 @@ export function XrdWorkspace({
               onNavigateToIntegrated={onNavigateToIntegrated}
             />
           ) : (
-            <Card className="p-8 text-center space-y-4">
-              <CheckCircle2 className="w-10 h-10 text-[#3182F6] mx-auto" />
-              <div className="space-y-1">
-                <h3 className="text-[17px] font-bold text-[#191F28]">
-                  선택된 파일({selectedXrdFile?.original_filename})의 정밀 XRD 분석을 실행할 준비가 되었습니다
-                </h3>
-                <p className="text-[13px] text-[#6B7684]">
-                  아래 버튼을 누르면 배경 보정(ALS), 비평활 피크 프로파일 피팅, 결정상 동정 및 Scherrer/Williamson–Hall 결정자 크기 계산을 수행합니다.
-                </p>
-              </div>
-              <div>
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="lg"
-                  disabled={isBusy || isJobRunning}
-                  onClick={() => onStartXrdRun(selectedXrdFile?.id)}
-                >
-                  <Play className="w-4 h-4" />
-                  <span>{selectedXrdFile?.original_filename} 정밀 XRD 분석 시작</span>
-                </Button>
+            <Card className="p-6 sm:p-8 space-y-5">
+              {individualPreviewPlot && (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-[15px] font-bold text-[#191F28]">
+                      원본 XRD 측정 데이터 그래프 — {selectedXrdFile?.original_filename}
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0]">
+                      원본 측정값 (2θ: {selectedRawCurve?.two_theta[0]?.toFixed(2)}°–
+                      {selectedRawCurve?.two_theta[selectedRawCurve.two_theta.length - 1]?.toFixed(2)}° · 주피크{" "}
+                      {selectedRawCurve?.max_two_theta_raw?.toFixed(3)}°, I_max=
+                      {selectedRawCurve?.max_intensity_raw?.toFixed(2)})
+                    </span>
+                  </div>
+                  <div className="rounded-[16px] border border-[#E5E8EB] p-3 bg-white">
+                    <PlotlyChart
+                      data={individualPreviewPlot.traces}
+                      layout={individualPreviewPlot.layout}
+                      height={380}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="text-center space-y-3 pt-2">
+                <CheckCircle2 className="w-9 h-9 text-[#3182F6] mx-auto" />
+                <div className="space-y-1">
+                  <h3 className="text-[17px] font-bold text-[#191F28]">
+                    선택된 파일({selectedXrdFile?.original_filename})의 정밀 XRD 분석을 실행할 준비가 되었습니다
+                  </h3>
+                  <p className="text-[13px] text-[#6B7684]">
+                    아래 버튼을 누르면 배경 보정(ALS), 비평활 피크 프로파일 피팅, 결정상 동정 및 Scherrer/Williamson–Hall 결정자 크기 계산을 수행합니다.
+                  </p>
+                </div>
+                <div>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="lg"
+                    disabled={isBusy || isJobRunning}
+                    onClick={() => onStartXrdRun(selectedXrdFile?.id)}
+                  >
+                    <Play className="w-4 h-4" />
+                    <span>{selectedXrdFile?.original_filename} 정밀 XRD 분석 시작</span>
+                  </Button>
+                </div>
               </div>
             </Card>
           )}

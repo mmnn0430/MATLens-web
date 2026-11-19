@@ -946,10 +946,7 @@ export default function App() {
               serviceMode === "matlens" ? "xrd" : serviceMode
             }
             onSelectSample={handleSelectSampleKeepMode}
-            onOpenRegisterModal={() => {
-              setEditingSampleTarget(null);
-              setSampleModalOpen(true);
-            }}
+            onNavigateHomeSampleManager={() => switchMode("home")}
             onOpenEditModal={() => {
               if (activeProject) {
                 setEditingSampleTarget(activeProject);
@@ -970,6 +967,14 @@ export default function App() {
         {(visitedModes.utm || serviceMode === "utm") && (
           <div className={serviceMode === "utm" ? "block" : "hidden"}>
             <UtmView
+              activeSample={activeProject}
+              onRecordSaved={async () => {
+                if (activeProject) {
+                  const p = await api.getProject(activeProject.id);
+                  setActiveProject(p);
+                }
+                refreshProjectsList();
+              }}
               onNavigateToIntegrated={() => switchMode("integrated")}
             />
           </div>
@@ -978,6 +983,14 @@ export default function App() {
         {(visitedModes.hall || serviceMode === "hall") && (
           <div className={serviceMode === "hall" ? "block" : "hidden"}>
             <HallView
+              activeSample={activeProject}
+              onRecordSaved={async () => {
+                if (activeProject) {
+                  const p = await api.getProject(activeProject.id);
+                  setActiveProject(p);
+                }
+                refreshProjectsList();
+              }}
               onNavigateToIntegrated={() => switchMode("integrated")}
             />
           </div>
@@ -986,6 +999,14 @@ export default function App() {
         {(visitedModes.lfa || serviceMode === "lfa") && (
           <div className={serviceMode === "lfa" ? "block" : "hidden"}>
             <LfaView
+              activeSample={activeProject}
+              onRecordSaved={async () => {
+                if (activeProject) {
+                  const p = await api.getProject(activeProject.id);
+                  setActiveProject(p);
+                }
+                refreshProjectsList();
+              }}
               onNavigateToIntegrated={() => switchMode("integrated")}
             />
           </div>

@@ -196,6 +196,61 @@ def _compute_instrument_counts(conn: Any, project_id: str) -> dict[str, int]:
     return counts
 
 
+def _build_measurement_summaries(conn: Any, project_id: str) -> dict[str, list[dict[str, Any]]]:
+    """Return lightweight list of connected measurement records per instrument for a sample."""
+    grouped: dict[str, list[dict[str, Any]]] = {
+        "XRD": [],
+        "SEM": [],
+        "CIF": [],
+        "UTM": [],
+        "HALL": [],
+        "LFA": [],
+        "FTIR": [],
+        "DSC": [],
+        "TGA": [],
+    }
+    for f in conn.execute(
+        "SELECT id, file_role, original_filename, size_bytes, created_at FROM project_files WHERE project_id = ? ORDER BY created_at ASC",
+        (project_id,),
+    ).fetchall():
+        role_up = str(f["file_role"] or "").upper()
+        if role_up in grouped:
+            grouped[role_up].append(
+                {
+                    "id": f["id"],
+                    "filename": f["original_filename"],
+                    "summary": f"{round(float(f['size_bytes'] or 0) / 1024.0, 1)} KB",
+                    "created_at": f["created_at"],
+                }
+            )
+    try:
+        a_map: dict[str, str] = {}
+        for ar in conn.execute(
+            "SELECT measurement_id, summary_text FROM sample_analysis_results WHERE sample_id = ? ORDER BY created_at ASC",
+            (project_id,),
+        ).fetchall():
+            if ar["measurement_id"]:
+                a_map[ar["measurement_id"]] = ar["summary_text"] or ""
+
+        for mr in conn.execute(
+            "SELECT id, instrument_type, original_filename, created_at FROM sample_measurements WHERE sample_id = ? ORDER BY created_at DESC",
+            (project_id,),
+        ).fetchall():
+            inst_up = str(mr["instrument_type"] or "").upper().replace("-", "")
+            if inst_up in grouped:
+                grouped[inst_up].append(
+                    {
+                        "id": mr["id"],
+                        "filename": mr["original_filename"],
+                        "summary": a_map.get(mr["id"], ""),
+                        "created_at": mr["created_at"],
+                    }
+                )
+    except Exception:
+        pass
+    return grouped
+
+
 def _serialize_project(project_id: str) -> dict[str, Any]:
     with get_conn() as conn:
         proj = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
@@ -221,6 +276,7 @@ def _serialize_project(project_id: str) -> dict[str, Any]:
             (project_id,),
         ).fetchone()
         inst_counts = _compute_instrument_counts(conn, project_id)
+        meas_summaries = _build_measurement_summaries(conn, project_id)
 
     latest_run_id = runs[0]["id"] if runs else None
     has_outdated_ai = bool(latest_ai and latest_run_id and latest_ai["run_id"] != latest_run_id)
@@ -255,6 +311,7 @@ def _serialize_project(project_id: str) -> dict[str, Any]:
         "processing_method": s_meta.get("processing_method") or "",
         "experiment_memo": s_meta.get("experiment_memo") or "",
         "instrument_counts": inst_counts,
+        "measurement_summaries": meas_summaries,
         "current_conditions": cond_obj,
         "files": files_out,
         "runs": [_extract_run_summary(r) for r in runs],
@@ -454,6 +511,7 @@ def list_projects() -> list[dict[str, Any]]:
                 for fr in conn.execute("SELECT file_role FROM project_files WHERE project_id = ?", (p["id"],)).fetchall()
             ]
             inst_counts = _compute_instrument_counts(conn, p["id"])
+            meas_summaries = _build_measurement_summaries(conn, p["id"])
             for k, v in inst_counts.items():
                 if v > 0 and k.lower() not in file_roles:
                     file_roles.append(k.lower())
@@ -482,6 +540,7 @@ def list_projects() -> list[dict[str, Any]]:
                     "processing_method": s_meta.get("processing_method") or "",
                     "experiment_memo": s_meta.get("experiment_memo") or "",
                     "instrument_counts": inst_counts,
+                    "measurement_summaries": meas_summaries,
                     "experiment_meta": infer_or_extract_experiment_meta(p_raw),
                     "file_roles": sorted(set(file_roles)),
                     "run_count": int(run_cnt) + int(ext_run_cnt),
@@ -755,8 +814,11 @@ def _attach_file_bytes_to_project(
 
 
 @app.post("/api/projects/sample-demo")
-def create_sample_demo_project(preset: str = Query(default="tio2_powder")) -> dict[str, Any]:
-    """Create a clearly badged '[샘플]' demo project and optionally start initial run."""
+def create_sample_demo_project(
+    preset: str = Query(default="tio2_powder"),
+    reuse_existing: bool = Query(default=True),
+) -> dict[str, Any]:
+    """Create or reuse a clearly badged '[샘플]' demo project without duplicating sample entries."""
     xrd_sample_path = SAMPLES_DIR / "sample_anatase_rutile_xrd.csv"
     sem_particle_path = SAMPLES_DIR / "sample_tio2_particles_sem.png"
     sem_grain_path = SAMPLES_DIR / "sample_sintered_grains_sem.png"
@@ -796,6 +858,21 @@ def create_sample_demo_project(preset: str = Query(default="tio2_powder")) -> di
         formula = "TiO2"
         is_same = True
         is_demo_flag = 1
+
+    if reuse_existing:
+        with get_conn() as conn:
+            existing = conn.execute(
+                "SELECT id FROM projects WHERE sample_name = ? AND is_sample_demo = ? ORDER BY updated_at DESC LIMIT 1",
+                (sname, is_demo_flag),
+            ).fetchone()
+            if existing:
+                f_cnt = conn.execute(
+                    "SELECT COUNT(*) AS c FROM project_files WHERE project_id = ?",
+                    (existing["id"],),
+                ).fetchone()["c"]
+                if f_cnt > 0:
+                    conn.execute("UPDATE projects SET updated_at = ? WHERE id = ?", (now, existing["id"]))
+                    return _serialize_project(existing["id"])
 
     with get_conn() as conn:
         conn.execute(
@@ -973,15 +1050,16 @@ def get_raw_uploaded_file(project_id: str, file_id: str, download: bool = Query(
     if not full_path.exists():
         raise HTTPException(status_code=404, detail="저장소에서 파일을 찾을 수 없습니다.")
 
-    # Convert .tif / .tiff / .bmp SEM images to lossless PNG when rendered in browser <img> tag
+    # Convert .tif / .tiff / .bmp SEM images to lossless PNG when rendered in browser <img> tag (cached on disk)
     if not download and row["file_role"] == "sem" and full_path.suffix.lower() in {".tif", ".tiff", ".bmp"}:
-        import io
+        preview_path = Path(f"{full_path}.preview.png")
+        if preview_path.exists():
+            return FileResponse(str(preview_path), media_type="image/png")
         from PIL import Image
 
         with Image.open(full_path) as im:
-            buf = io.BytesIO()
-            im.convert("RGB").save(buf, format="PNG")
-            return Response(content=buf.getvalue(), media_type="image/png")
+            im.convert("RGB").save(preview_path, format="PNG", compress_level=1)
+        return FileResponse(str(preview_path), media_type="image/png")
 
     return FileResponse(str(full_path), filename=row["original_filename"])
 
@@ -1006,6 +1084,25 @@ def start_analysis_run(project_id: str, req: RunAnalysisRequest) -> dict[str, An
         if not any(f["file_role"] in ("xrd", "sem") for f in files):
             raise HTTPException(status_code=400, detail="분석을 실행하려면 XRD 파일 또는 SEM 이미지를 최소 1개 이상 업로드해주세요.")
 
+        params_dump = req.model_dump()
+        params_json_str = json.dumps(params_dump, ensure_ascii=False)
+
+        # Prevent duplicate execution while an identical run is already queued or running
+        active_dup = conn.execute(
+            """
+            SELECT id, run_number, status FROM analysis_runs
+            WHERE project_id = ? AND status IN ('queued', 'running') AND params_json = ?
+            ORDER BY run_number DESC LIMIT 1
+            """,
+            (project_id, params_json_str),
+        ).fetchone()
+        if active_dup:
+            return {
+                "run_id": active_dup["id"],
+                "run_number": int(active_dup["run_number"]),
+                "status": active_dup["status"],
+            }
+
         max_num = conn.execute(
             "SELECT COALESCE(MAX(run_number), 0) AS m FROM analysis_runs WHERE project_id = ?", (project_id,)
         ).fetchone()["m"]
@@ -1015,7 +1112,6 @@ def start_analysis_run(project_id: str, req: RunAnalysisRequest) -> dict[str, An
 
         file_hashes = {f"{f['file_role']}:{f['original_filename']}": f["sha256"] for f in files}
         algo_versions = get_algorithm_and_library_versions()
-        params_dump = req.model_dump()
 
         conn.execute(
             """
@@ -1028,7 +1124,7 @@ def start_analysis_run(project_id: str, req: RunAnalysisRequest) -> dict[str, An
                 run_id,
                 project_id,
                 run_number,
-                json.dumps(params_dump, ensure_ascii=False),
+                params_json_str,
                 json.dumps(file_hashes, ensure_ascii=False),
                 REF_LIBRARY_VERSION,
                 json.dumps(algo_versions, ensure_ascii=False),
@@ -1061,7 +1157,7 @@ def start_analysis_run(project_id: str, req: RunAnalysisRequest) -> dict[str, An
 
 @app.get("/api/projects/{project_id}/xrd-series")
 def get_project_xrd_series(project_id: str) -> dict[str, Any]:
-    """Return parsed 2θ & intensity curves and latest run summaries for all XRD files attached to a sample."""
+    """Return parsed original 2θ & intensity curves and latest run summaries for all XRD files attached to a sample."""
     with get_conn() as conn:
         proj = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
         if not proj:
@@ -1110,14 +1206,12 @@ def get_project_xrd_series(project_id: str) -> dict[str, Any]:
 
         if matched is not None:
             run_id_found, xres = matched
-            curve = xres.get("curve") or {}
-            two_theta_arr = [float(v) for v in (curve.get("two_theta") or [])]
-            intensity_raw = [float(v) for v in (curve.get("raw_intensity") or curve.get("corrected_intensity") or [])]
         else:
             run_id_found = None
             xres = None
 
-        if (not two_theta_arr or not intensity_raw) and full_p.exists():
+        # Always prioritize exact raw measurement file parsing without downsampling, interpolation, or smoothing
+        if full_p.exists():
             try:
                 f_params = xrd_params_by_file.get(fid) or default_xp
                 parsed = inspect_and_parse_xrd(
@@ -1125,16 +1219,30 @@ def get_project_xrd_series(project_id: str) -> dict[str, Any]:
                     col_two_theta=f_params.get("col_two_theta"),
                     col_intensity=f_params.get("col_intensity"),
                 )
-                two_theta_arr = [round(float(v), 4) for v in parsed["two_theta"].tolist()]
-                intensity_raw = [round(float(v), 2) for v in parsed["intensity"].tolist()]
+                two_theta_arr = [float(v) for v in parsed["x"].tolist()]
+                intensity_raw = [float(v) for v in parsed["y"].tolist()]
             except Exception:
                 pass
 
-        if intensity_raw:
+        # Fallback to stored run series only if raw file could not be read
+        if (not two_theta_arr or not intensity_raw) and xres is not None:
+            curve = xres.get("series") or xres.get("curve") or {}
+            two_theta_arr = [float(v) for v in (curve.get("two_theta") or [])]
+            intensity_raw = [float(v) for v in (curve.get("raw_intensity") or curve.get("corrected_unsmoothed") or curve.get("corrected_intensity") or [])]
+
+        max_two_theta_raw: float | None = None
+        max_intensity_raw: float | None = None
+        min_intensity_raw: float | None = None
+
+        if intensity_raw and two_theta_arr and len(intensity_raw) == len(two_theta_arr):
             min_i = min(intensity_raw)
             max_i = max(intensity_raw)
+            max_idx = intensity_raw.index(max_i)
+            max_two_theta_raw = float(two_theta_arr[max_idx])
+            max_intensity_raw = float(max_i)
+            min_intensity_raw = float(min_i)
             span = max(max_i - min_i, 1e-9)
-            intensity_norm = [round(((v - min_i) / span) * 100.0, 3) for v in intensity_raw]
+            intensity_norm = [round(((v - min_i) / span) * 100.0, 4) for v in intensity_raw]
 
         cands = ((xres or {}).get("phase_matching") or {}).get("candidates") or []
         top_cand = cands[0] if cands else {}
@@ -1146,9 +1254,13 @@ def get_project_xrd_series(project_id: str) -> dict[str, Any]:
                 "filename": xf["original_filename"],
                 "created_at": xf["created_at"],
                 "order_index": idx,
+                "n_points": len(two_theta_arr),
                 "two_theta": two_theta_arr,
                 "intensity_raw": intensity_raw,
                 "intensity_norm": intensity_norm,
+                "max_two_theta_raw": max_two_theta_raw,
+                "max_intensity_raw": max_intensity_raw,
+                "min_intensity_raw": min_intensity_raw,
                 "latest_run_id": run_id_found,
                 "peak_count": len(peaks_list),
                 "peaks": peaks_list[:20],
@@ -1234,7 +1346,7 @@ def list_sample_instrument_records(
 
 @app.post("/api/projects/{project_id}/records")
 def create_sample_instrument_record(project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Save a Measurement and its Analysis Result under a registered Sample."""
+    """Save or update a Measurement and its Analysis Result under a registered Sample."""
     inst_type = str(payload.get("instrument_type") or "unknown").strip().lower()
     orig_filename = str(payload.get("original_filename") or f"{inst_type}_data.csv").strip()
     meta_obj = payload.get("metadata") or {}
@@ -1242,9 +1354,10 @@ def create_sample_instrument_record(project_id: str, payload: dict[str, Any]) ->
     params_obj = payload.get("parameters") or {}
     results_obj = payload.get("results") or {}
     summary_text = str(payload.get("summary_text") or "").strip()
+    requested_mid = str(payload.get("measurement_id") or "").strip()
 
     now = utc_now_iso()
-    mid = new_id("meas")
+    mid = requested_mid or new_id("meas")
     aid = new_id("ares")
 
     with get_conn() as conn:
@@ -1252,22 +1365,52 @@ def create_sample_instrument_record(project_id: str, payload: dict[str, Any]) ->
         if not proj:
             raise HTTPException(status_code=404, detail="시료를 찾을 수 없습니다.")
 
-        conn.execute(
-            """
-            INSERT INTO sample_measurements (
-                id, sample_id, instrument_type, original_filename, metadata_json, raw_payload_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                mid,
-                project_id,
-                inst_type,
-                orig_filename,
-                json.dumps(meta_obj, ensure_ascii=False),
-                json.dumps(raw_obj, ensure_ascii=False),
-                now,
-            ),
-        )
+        existing_meas = None
+        if requested_mid:
+            existing_meas = conn.execute(
+                "SELECT id FROM sample_measurements WHERE id = ? AND sample_id = ?",
+                (requested_mid, project_id),
+            ).fetchone()
+
+        if existing_meas:
+            mid = existing_meas["id"]
+            conn.execute(
+                """
+                UPDATE sample_measurements
+                SET original_filename = ?, metadata_json = ?, raw_payload_json = ?
+                WHERE id = ? AND sample_id = ?
+                """,
+                (
+                    orig_filename,
+                    json.dumps(meta_obj, ensure_ascii=False),
+                    json.dumps(raw_obj, ensure_ascii=False),
+                    mid,
+                    project_id,
+                ),
+            )
+            conn.execute(
+                "DELETE FROM sample_analysis_results WHERE measurement_id = ? AND sample_id = ?",
+                (mid, project_id),
+            )
+        else:
+            mid = new_id("meas")
+            conn.execute(
+                """
+                INSERT INTO sample_measurements (
+                    id, sample_id, instrument_type, original_filename, metadata_json, raw_payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    mid,
+                    project_id,
+                    inst_type,
+                    orig_filename,
+                    json.dumps(meta_obj, ensure_ascii=False),
+                    json.dumps(raw_obj, ensure_ascii=False),
+                    now,
+                ),
+            )
+
         conn.execute(
             """
             INSERT INTO sample_analysis_results (

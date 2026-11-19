@@ -128,6 +128,13 @@ export interface RunBrief {
   sem_summary?: RunSemSummary | null;
 }
 
+export interface MeasurementSummaryItem {
+  id: string;
+  filename: string;
+  summary: string;
+  created_at: string;
+}
+
 export interface ProjectDetail {
   id: string;
   sample_name: string;
@@ -140,6 +147,7 @@ export interface ProjectDetail {
   processing_method?: string;
   experiment_memo?: string;
   instrument_counts?: Record<string, number>;
+  measurement_summaries?: Record<string, MeasurementSummaryItem[]>;
   experiment_meta?: ExperimentMeta;
   current_conditions: {
     xrd_params?: Partial<XRDParams>;
@@ -173,6 +181,7 @@ export interface ProjectListItem {
   processing_method?: string;
   experiment_memo?: string;
   instrument_counts?: Record<string, number>;
+  measurement_summaries?: Record<string, MeasurementSummaryItem[]>;
   experiment_meta?: ExperimentMeta;
   file_roles: string[];
   run_count: number;
@@ -184,9 +193,13 @@ export interface XrdSeriesCurveItem {
   filename: string;
   created_at: string;
   order_index: number;
+  n_points?: number;
   two_theta: number[];
   intensity_raw: number[];
   intensity_norm: number[];
+  max_two_theta_raw?: number | null;
+  max_intensity_raw?: number | null;
+  min_intensity_raw?: number | null;
   latest_run_id: string | null;
   peak_count: number;
   peaks: any[];

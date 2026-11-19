@@ -333,7 +333,7 @@ export function HomeDashboard({
     onRefreshProjects();
   };
 
-  // Build unified saved items from backend projects + browser session records
+  // Build unified saved items from common sample database (projects)
   const unifiedItems = useMemo<UnifiedSavedItem[]>(() => {
     const projectItems: UnifiedSavedItem[] = projects.map((p) => {
       const rolesUpper = (p.file_roles || []).map((r) => r.toUpperCase().replace("-", ""));
@@ -392,7 +392,7 @@ export function HomeDashboard({
         project: p,
         projectId: p.id,
         name: p.sample_name,
-        sampleCode: p.sample_code,
+        sampleCode: p.sample_code || p.id,
         processingMethod: p.processing_method,
         description:
           p.description ||
@@ -412,6 +412,10 @@ export function HomeDashboard({
       };
     });
 
+    if (projectItems.length > 0) {
+      return projectItems;
+    }
+
     const sessionItems: UnifiedSavedItem[] = localRecords.map((rec) => ({
       uid: rec.id,
       sourceType: "local_session",
@@ -428,7 +432,7 @@ export function HomeDashboard({
       targetMode: rec.targetMode,
     }));
 
-    return [...projectItems, ...sessionItems];
+    return sessionItems;
   }, [projects, localRecords]);
 
   // Counts per instrument for filter pills
@@ -868,6 +872,11 @@ export function HomeDashboard({
                         <span className="text-[15px] font-bold text-[#191F28] group-hover:text-[#3182F6] transition-colors truncate">
                           {item.name}
                         </span>
+                        {item.sampleCode && (
+                          <span className="px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-[#F2F4F6] text-[#4E5968] border border-[#E5E8EB]">
+                            ID: {item.sampleCode}
+                          </span>
+                        )}
                         {item.isSampleDemo && <SourceTag kind="샘플" />}
                       </div>
                       <p className="text-[12px] text-[#6B7684] line-clamp-1">{item.description}</p>
@@ -925,8 +934,8 @@ export function HomeDashboard({
                               onClick={() =>
                                 setExpandedSampleId((prev) => (prev === item.uid ? null : item.uid))
                               }
-                              title="시료 상세 정보 및 기기별 분석 데이터 확인"
-                              className="hidden xl:inline-flex items-center gap-1 px-2.5 py-1.5 rounded-[10px] text-[12px] font-semibold border border-[#E5E8EB] bg-[#F7F8FA] hover:border-[#3182F6] hover:text-[#3182F6] text-[#4E5968] cursor-pointer transition-colors whitespace-nowrap"
+                              title="시료 상세 정보 및 기기별 연결된 측정 데이터 확인"
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-[10px] text-[12px] font-semibold border border-[#E5E8EB] bg-[#F7F8FA] hover:border-[#3182F6] hover:text-[#3182F6] text-[#4E5968] cursor-pointer transition-colors whitespace-nowrap"
                             >
                               {isExpanded ? "상세 닫기" : "시료 상세"}
                             </button>
@@ -969,11 +978,20 @@ export function HomeDashboard({
                   {/* Expanded Sample Detail & Instrument Data Matrix */}
                   {isExpanded && item.sourceType === "project" && item.project && (
                     <div className="px-5 py-4 bg-[#F8FAFC] border-t border-[#E5E8EB] space-y-4">
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[12px]">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-[12px]">
                         <div className="p-3 rounded-[12px] bg-white border border-[#E5E8EB]">
-                          <div className="text-[#8B95A1] font-semibold">시료 코드 (Sample ID)</div>
+                          <div className="text-[#8B95A1] font-semibold">공통 시료 코드 (Sample ID)</div>
                           <div className="font-mono font-bold text-[#191F28] mt-0.5">
                             {item.project.sample_code || item.project.id}
+                          </div>
+                        </div>
+                        <div className="p-3 rounded-[12px] bg-white border border-[#E5E8EB]">
+                          <div className="text-[#8B95A1] font-semibold">화학 조성 및 구성 원소</div>
+                          <div className="font-semibold text-[#191F28] mt-0.5">
+                            {item.project.expected_formula || item.materialOrFormula || "미입력"}
+                            {item.project.expected_elements?.length
+                              ? ` (${item.project.expected_elements.join(", ")})`
+                              : ""}
                           </div>
                         </div>
                         <div className="p-3 rounded-[12px] bg-white border border-[#E5E8EB]">
@@ -983,7 +1001,7 @@ export function HomeDashboard({
                           </div>
                         </div>
                         <div className="p-3 rounded-[12px] bg-white border border-[#E5E8EB]">
-                          <div className="text-[#8B95A1] font-semibold">측정 · 실험 메모</div>
+                          <div className="text-[#8B95A1] font-semibold">측정 · 실험 메모 및 설명</div>
                           <div className="font-medium text-[#191F28] mt-0.5">
                             {item.project.experiment_memo || item.project.description || "미입력"}
                           </div>
@@ -991,43 +1009,95 @@ export function HomeDashboard({
                       </div>
 
                       <div className="space-y-2">
-                        <div className="text-[12px] font-bold text-[#191F28]">
-                          시료 기반 기기별 등록 데이터 현황 및 분석 화면 바로가기
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="text-[12px] font-bold text-[#191F28]">
+                            시료별 연결된 측정 데이터 (Measurement Records) 및 분석기기 바로가기
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => onOpenEditSampleModal(item.project!)}
+                              className="text-[11px] font-semibold text-[#3182F6] hover:underline cursor-pointer"
+                            >
+                              시료 정보 수정
+                            </button>
+                            <span className="text-[#D1D6DB]">|</span>
+                            <button
+                              type="button"
+                              onClick={() => onOpenProject(item.project!.id, "integrated")}
+                              className="text-[11px] font-semibold text-[#7C3AED] hover:underline cursor-pointer"
+                            >
+                              이 시료의 통합 리포트 열기 →
+                            </button>
+                          </div>
                         </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
                           {(
                             [
-                              { key: "XRD", label: "XRD", mode: "xrd" as ServiceMode },
-                              { key: "SEM", label: "SEM", mode: "sem" as ServiceMode },
-                              { key: "UTM", label: "UTM", mode: "utm" as ServiceMode },
-                              { key: "HALL", label: "Hall", mode: "hall" as ServiceMode },
-                              { key: "LFA", label: "LFA", mode: "lfa" as ServiceMode },
-                              { key: "FTIR", label: "FT-IR", mode: "ftir" as ServiceMode },
-                              { key: "DSC", label: "DSC", mode: "dsc" as ServiceMode },
-                              { key: "TGA", label: "TGA", mode: "tga" as ServiceMode },
+                              { key: "XRD", label: "XRD Data (X선 회절)", mode: "xrd" as ServiceMode },
+                              { key: "SEM", label: "SEM Images (전자현미경)", mode: "sem" as ServiceMode },
+                              { key: "UTM", label: "UTM Data (인장·기계)", mode: "utm" as ServiceMode },
+                              { key: "HALL", label: "Hall Data (전하수송)", mode: "hall" as ServiceMode },
+                              { key: "LFA", label: "LFA Data (열확산·열전도)", mode: "lfa" as ServiceMode },
+                              { key: "FTIR", label: "FT-IR Data (적외선분광)", mode: "ftir" as ServiceMode },
+                              { key: "DSC", label: "DSC Data (열량분석)", mode: "dsc" as ServiceMode },
+                              { key: "TGA", label: "TGA Data (열중량분석)", mode: "tga" as ServiceMode },
                             ]
                           ).map((inst) => {
                             const cnt = item.instrumentCounts?.[inst.key] || 0;
+                            const recordsList = item.project?.measurement_summaries?.[inst.key] || [];
                             return (
-                              <button
+                              <div
                                 key={inst.key}
-                                type="button"
-                                onClick={() => onOpenProject(item.project!.id, inst.mode)}
-                                className={`p-2.5 rounded-[10px] border text-left transition-all cursor-pointer ${
+                                className={`p-3 rounded-[12px] border transition-all flex flex-col justify-between gap-2 ${
                                   cnt > 0
-                                    ? "bg-white border-[#BFDBFE] hover:border-[#3182F6]"
-                                    : "bg-white/60 border-[#E5E8EB] hover:border-[#90B8F8]"
+                                    ? "bg-white border-[#BFDBFE]"
+                                    : "bg-white/60 border-[#E5E8EB]"
                                 }`}
                               >
-                                <div className="text-[12px] font-bold text-[#191F28]">{inst.label}</div>
-                                <div
-                                  className={`text-[11px] mt-0.5 font-semibold ${
-                                    cnt > 0 ? "text-[#3182F6]" : "text-[#8B95A1]"
-                                  }`}
-                                >
-                                  등록 데이터: {cnt}개
+                                <div className="space-y-1.5">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[12px] font-bold text-[#191F28]">{inst.label}</span>
+                                    <span
+                                      className={`px-2 py-0.5 rounded-full text-[11px] font-bold tabular-nums ${
+                                        cnt > 0
+                                          ? "bg-[#EFF6FF] text-[#3182F6]"
+                                          : "bg-[#F2F4F6] text-[#8B95A1]"
+                                      }`}
+                                    >
+                                      {cnt}개
+                                    </span>
+                                  </div>
+
+                                  {recordsList.length > 0 ? (
+                                    <ul className="space-y-1 max-h-[96px] overflow-y-auto pr-1">
+                                      {recordsList.map((rec) => (
+                                        <li
+                                          key={rec.id}
+                                          className="text-[11px] text-[#4E5968] bg-[#F8FAFC] px-2 py-1 rounded border border-[#E5E8EB] truncate"
+                                          title={`${rec.filename}${rec.summary ? ` (${rec.summary})` : ""}`}
+                                        >
+                                          <strong className="text-[#191F28]">{rec.filename}</strong>
+                                          {rec.summary ? ` · ${rec.summary}` : ""}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  ) : (
+                                    <div className="text-[11px] text-[#8B95A1]">
+                                      연결된 측정 파일 없음
+                                    </div>
+                                  )}
                                 </div>
-                              </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenProject(item.project!.id, inst.mode)}
+                                  className="w-full py-1.5 px-2.5 rounded-[8px] text-[11px] font-semibold bg-[#F7F8FA] hover:bg-[#EFF6FF] text-[#3182F6] border border-[#E5E8EB] hover:border-[#BFDBFE] transition-colors cursor-pointer text-center"
+                                >
+                                  {cnt > 0 ? `${inst.key} 데이터 열기·추가 →` : `${inst.key} 측정 데이터 등록 →`}
+                                </button>
+                              </div>
                             );
                           })}
                         </div>
@@ -1053,14 +1123,36 @@ export function HomeDashboard({
               <div className="w-10 h-10 rounded-full bg-[#FEE2E2] text-[#DC2626] flex items-center justify-center shrink-0">
                 <AlertTriangle className="w-5 h-5" />
               </div>
-              <div>
+              <div className="space-y-2">
                 <h3 className="text-[17px] font-bold text-[#191F28]">
-                  시료 삭제 확인 및 연결 데이터 보호 안내
+                  시료 삭제 확인 및 연결 데이터 보호 경고
                 </h3>
-                <p className="text-[13px] text-[#4E5968] mt-1 leading-relaxed">
-                  <strong>{confirmDeleteSample.sample_name}</strong> 시료에는 현재{" "}
-                  <strong>분석 실행 {confirmDeleteSample.run_count}회</strong> 및 연결된 측정 데이터가 포함되어 있습니다.
-                  시료를 삭제하면 연결된 측정 파일과 분석 이력도 함께 제거됩니다. 정말 삭제하시겠습니까?
+                <p className="text-[13px] text-[#4E5968] leading-relaxed">
+                  <strong>{confirmDeleteSample.sample_name}</strong> (Sample ID:{" "}
+                  <span className="font-mono">{confirmDeleteSample.sample_code || confirmDeleteSample.id}</span>) 시료에는 현재{" "}
+                  <strong>
+                    연결된 측정 데이터{" "}
+                    {Object.values(confirmDeleteSample.instrument_counts || {}).reduce(
+                      (a, b) => a + Number(b || 0),
+                      0
+                    )}
+                    건
+                  </strong>{" "}
+                  및 <strong>분석 실행 이력 {confirmDeleteSample.run_count}회</strong>가 저장되어 있습니다.
+                </p>
+                {Object.entries(confirmDeleteSample.instrument_counts || {}).some(
+                  ([, c]) => Number(c) > 0
+                ) && (
+                  <div className="p-2.5 rounded-[10px] bg-[#FEF2F2] border border-[#FECACA] text-[12px] text-[#991B1B]">
+                    연결된 기기별 데이터:{" "}
+                    {Object.entries(confirmDeleteSample.instrument_counts || {})
+                      .filter(([, c]) => Number(c) > 0)
+                      .map(([k, c]) => `${k} ${c}건`)
+                      .join(", ")}
+                  </div>
+                )}
+                <p className="text-[12px] text-[#DC2626] font-semibold">
+                  시료를 삭제하면 연결된 모든 분석기기의 측정 파일과 분석 결과가 함께 삭제됩니다. 정말 삭제하시겠습니까?
                 </p>
               </div>
             </div>
