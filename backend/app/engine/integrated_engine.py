@@ -782,14 +782,59 @@ def perform_cross_instrument_analysis(
                     "term_explanation": "X선이 위상차 없이 결맞게 산란되는 최소 단결정 도메인 크기로, SEM에서 보이는 외형 입자/결정립 크기와는 별개의 물리량입니다.",
                 }
             )
+        lat_params = eff_xrd.get("lattice_parameters") or eff_xrd.get("lattice_params")
+        if lat_params and isinstance(lat_params, dict):
+            lat_parts = [
+                f"{k} = {v:.4f} Å" if isinstance(v, (int, float)) else f"{k} = {v}"
+                for k, v in lat_params.items()
+                if k in ["a", "b", "c"]
+            ]
+            if lat_parts:
+                key_metrics_table.append(
+                    {
+                        "instrument": "XRD",
+                        "metric_name": "격자 상수 (Lattice Parameters)",
+                        "value": ", ".join(lat_parts),
+                        "unit": "Å",
+                        "condition": "결정학적 피크 피팅 기반",
+                        "category": "계산 결과",
+                        "source_label": eff_xrd.get("source_file") or "XRD 회절 패턴",
+                        "term_explanation": "단위 격자(Unit Cell)의 축 길이로, 원자 간 결합 거리 및 고용체 치환에 따른 격자 변형을 반영합니다.",
+                    }
+                )
+        peaks = eff_xrd.get("peaks") or []
+        if isinstance(peaks, list) and len(peaks) > 0 and isinstance(peaks[0], dict):
+            top_p = max(peaks, key=lambda p: float(p.get("intensity") or p.get("height") or 0.0))
+            p_pos = top_p.get("two_theta") or top_p.get("position")
+            p_fwhm = top_p.get("fwhm")
+            if p_pos is not None:
+                fwhm_str = f", FWHM = {float(p_fwhm):.3f}°" if p_fwhm is not None else ""
+                key_metrics_table.append(
+                    {
+                        "instrument": "XRD",
+                        "metric_name": "최대 회절 피크 위치 및 반가폭 (Peak Position & FWHM)",
+                        "value": f"2θ = {float(p_pos):.2f}°{fwhm_str}",
+                        "unit": "° (deg)",
+                        "condition": eff_xrd.get("xray_source") or "Cu Kα (λ = 1.5406 Å)",
+                        "category": "측정 사실",
+                        "source_label": eff_xrd.get("source_file") or "XRD 회절 피크 검출",
+                        "term_explanation": "가장 강하게 검출된 브래그 회절 피크의 각도와 반가폭으로, 결정 배향성 및 결정립 미세도/격자 불완전성을 나타냅니다.",
+                    }
+                )
 
     if eff_sem:
-        if eff_sem.get("grain_size_um") is not None:
+        g_size = (
+            eff_sem.get("grain_size_um")
+            or eff_sem.get("mean_intercept_length_um")
+            or (eff_sem.get("summary_stats") or {}).get("mean_diameter")
+            or (round(float(eff_sem["mean_diameter_nm"]) / 1000.0, 3) if eff_sem.get("mean_diameter_nm") is not None else None)
+        )
+        if g_size is not None:
             key_metrics_table.append(
                 {
                     "instrument": "SEM",
                     "metric_name": "평균 결정립 / 입자 크기 (2D Grain/Particle Size)",
-                    "value": f"{eff_sem.get('grain_size_um')}",
+                    "value": f"{g_size}",
                     "unit": "µm",
                     "condition": eff_sem.get("magnification") or "2D 전자현미경 스케일 보정 시야",
                     "category": "계산 결과",
@@ -797,12 +842,13 @@ def perform_cross_instrument_analysis(
                     "term_explanation": "SEM 2차원 표면/단면 영상에서 분할된 입자 또는 결정립계의 겉보기 치수입니다.",
                 }
             )
-        if eff_sem.get("porosity_pct") is not None:
+        porosity = eff_sem.get("porosity_pct") if eff_sem.get("porosity_pct") is not None else (eff_sem.get("summary_stats") or {}).get("porosity_pct")
+        if porosity is not None:
             key_metrics_table.append(
                 {
                     "instrument": "SEM",
                     "metric_name": "면적 기공률 추정치 (2D Area Porosity)",
-                    "value": f"{eff_sem.get('porosity_pct')}",
+                    "value": f"{porosity}",
                     "unit": "%",
                     "condition": "SEM 단면 명암 임계 분할",
                     "category": "계산 결과",
@@ -810,14 +856,65 @@ def perform_cross_instrument_analysis(
                     "term_explanation": "소결체나 코팅 단면 내 빈 공간(기공)의 면적 분율로, 기계적 강도와 열전도도를 낮추는 요인입니다.",
                 }
             )
+        sem_stats = eff_sem.get("summary_stats") or {}
+        if sem_stats.get("d50") is not None:
+            d10 = sem_stats.get("d10")
+            d50 = sem_stats.get("d50")
+            d90 = sem_stats.get("d90")
+            d_parts = [f"D50 = {d50} µm"]
+            if d10 is not None:
+                d_parts.insert(0, f"D10 = {d10} µm")
+            if d90 is not None:
+                d_parts.append(f"D90 = {d90} µm")
+            key_metrics_table.append(
+                {
+                    "instrument": "SEM",
+                    "metric_name": "입도 분포 대표값 (Size Distribution D10/D50/D90)",
+                    "value": " | ".join(d_parts),
+                    "unit": "µm",
+                    "condition": sem_stats.get("distribution_basis") or "2D 이미지 분할 누적 입경",
+                    "category": "계산 결과",
+                    "source_label": eff_sem.get("source_file") or "SEM 입자 분석",
+                    "term_explanation": "누적 입도 분포 곡선에서 10%, 50%(중간 직경), 90%에 해당하는 대표 입자 직경입니다.",
+                }
+            )
+        grain_info = eff_sem.get("grain_intercept") or {}
+        if grain_info.get("astm_grain_size_number") is not None:
+            key_metrics_table.append(
+                {
+                    "instrument": "SEM",
+                    "metric_name": "ASTM 결정립도 번호 (ASTM Grain Size Number, G)",
+                    "value": f"G = {grain_info.get('astm_grain_size_number')}",
+                    "unit": "-",
+                    "condition": "ASTM E112 절단선법 (Intercept method)",
+                    "category": "계산 결과",
+                    "source_label": eff_sem.get("source_file") or "SEM 결정립 분석",
+                    "term_explanation": "표준 ASTM E112 시험 규격에 따라 산출한 결정립도 번호로, 숫자가 클수록 결정립이 미세함을 의미합니다.",
+                }
+            )
+        p_count = eff_sem.get("particle_count") or sem_stats.get("total_count") or eff_sem.get("n_valid_objects")
+        if p_count is not None and int(p_count) > 0:
+            key_metrics_table.append(
+                {
+                    "instrument": "SEM",
+                    "metric_name": "검출된 유효 입자/결정립 수 (Count)",
+                    "value": f"{int(p_count)}개",
+                    "unit": "개",
+                    "condition": "유효 ROI 영역 내",
+                    "category": "측정 사실",
+                    "source_label": eff_sem.get("source_file") or "SEM 미세조직 이미지",
+                    "term_explanation": "스케일 보정된 분석 영역 내에서 통계적으로 유효하게 계측된 입자 또는 결정립 개수입니다.",
+                }
+            )
 
     if eff_utm:
-        if eff_utm.get("tensile_strength_MPa") is not None:
+        uts_val = eff_utm.get("tensile_strength_MPa") or eff_utm.get("uts_MPa")
+        if uts_val is not None:
             key_metrics_table.append(
                 {
                     "instrument": "UTM",
                     "metric_name": "최대 인장강도 (Ultimate Tensile Strength, UTS)",
-                    "value": f"{eff_utm.get('tensile_strength_MPa')}",
+                    "value": f"{uts_val}",
                     "unit": "MPa",
                     "condition": eff_utm.get("test_condition") or "단축 인장 시험 (공칭 응력 기준)",
                     "category": "측정 사실",
@@ -825,12 +922,13 @@ def perform_cross_instrument_analysis(
                     "term_explanation": "시편이 파단되기 전까지 견딘 최대 공칭 응력(최대 하중 ÷ 초기 단면적 A0)입니다.",
                 }
             )
-        if eff_utm.get("yield_strength_MPa") is not None:
+        ys_val = eff_utm.get("yield_strength_MPa") or eff_utm.get("rp02_MPa")
+        if ys_val is not None:
             key_metrics_table.append(
                 {
                     "instrument": "UTM",
                     "metric_name": "0.2% 오프셋 항복강도 (Yield Strength, Rp0.2)",
-                    "value": f"{eff_utm.get('yield_strength_MPa')}",
+                    "value": f"{ys_val}",
                     "unit": "MPa",
                     "condition": "0.2% 소성 변형 오프셋 교점",
                     "category": "계산 결과",
@@ -838,25 +936,27 @@ def perform_cross_instrument_analysis(
                     "term_explanation": "영구적인 소성 변형이 본격적으로 시작되는 기준 응력입니다.",
                 }
             )
-        if eff_utm.get("elastic_modulus_GPa") is not None:
+        mod_val = eff_utm.get("elastic_modulus_GPa") or eff_utm.get("modulus_GPa")
+        if mod_val is not None:
             key_metrics_table.append(
                 {
                     "instrument": "UTM",
                     "metric_name": "탄성계수 (Young's Modulus, E)",
-                    "value": f"{eff_utm.get('elastic_modulus_GPa')}",
+                    "value": f"{mod_val}",
                     "unit": "GPa",
                     "condition": "초기 선형 탄성 구간 기울기",
                     "category": "계산 결과",
                     "source_label": eff_utm.get("source_file") or "UTM 탄성 구간 선형 회귀",
-                    "term_explanation": "탄성 변형 구간에서 응력과 변형률의 비례 상수로, 재료의 원자 결합 강성(달라지지 않는 고유 강성)을 반영합니다.",
+                    "term_explanation": "탄성 변형 구간에서 응력과 변형률의 비례 상수로, 재료의 원자 결합 강성(고유 강성)을 반영합니다.",
                 }
             )
-        if eff_utm.get("elongation_pct") is not None:
+        elong_val = eff_utm.get("elongation_pct") or eff_utm.get("fracture_strain_pct")
+        if elong_val is not None:
             key_metrics_table.append(
                 {
                     "instrument": "UTM",
                     "metric_name": "파단 연신율 (Elongation at Break)",
-                    "value": f"{eff_utm.get('elongation_pct')}",
+                    "value": f"{elong_val}",
                     "unit": "%",
                     "condition": "파단 시점 최대 공칭 변형률",
                     "category": "측정 사실",
@@ -905,6 +1005,20 @@ def perform_cross_instrument_analysis(
                     "term_explanation": "전류가 흐르는 정도(σ = n·e·µ_H)로, 캐리어 농도와 이동도의 곱에 비례합니다.",
                 }
             )
+        res_val = eff_hall.get("resistivity_Ohm_cm")
+        if res_val is not None:
+            key_metrics_table.append(
+                {
+                    "instrument": "Hall",
+                    "metric_name": "비저항 (Electrical Resistivity, ρ)",
+                    "value": f"{res_val}",
+                    "unit": "Ω·cm",
+                    "condition": f"Van der Pauw 면저항 기반 · {temp_str}",
+                    "category": "측정 사실",
+                    "source_label": eff_hall.get("source_file") or "Hall 측정",
+                    "term_explanation": "전류의 흐름을 방해하는 재료 고유의 전기적 저항률(ρ = 1/σ)입니다.",
+                }
+            )
 
     if eff_lfa:
         if lfa_alpha is not None:
@@ -933,14 +1047,41 @@ def perform_cross_instrument_analysis(
                     "term_explanation": "열확산도(α), 시편 밀도(ρ), 비열(Cp) 세 가지 값을 곱해 산출한 정상 상태 열전달 능력입니다.",
                 }
             )
+        if lfa_rho is not None and float(lfa_rho) > 0:
+            key_metrics_table.append(
+                {
+                    "instrument": "LFA",
+                    "metric_name": "시편 측정 밀도 (Density, ρ)",
+                    "value": f"{lfa_rho}",
+                    "unit": "g/cm³",
+                    "condition": "아르키메데스법 / 치수-질량 계측",
+                    "category": "측정 사실",
+                    "source_label": eff_lfa.get("source_file") or "LFA 시편 조건",
+                    "term_explanation": "열전도도 계산에 사용된 시편의 부피당 질량입니다.",
+                }
+            )
+        if lfa_cp is not None and float(lfa_cp) > 0:
+            key_metrics_table.append(
+                {
+                    "instrument": "LFA",
+                    "metric_name": "시편 비열 (Specific Heat, Cp)",
+                    "value": f"{lfa_cp}",
+                    "unit": "J/(g·K)",
+                    "condition": f"DSC/표준 문헌 기준 · {temp_str}",
+                    "category": "측정 사실",
+                    "source_label": eff_lfa.get("source_file") or "LFA 시편 조건",
+                    "term_explanation": "단위 질량의 시편 온도를 1 K 올리는 데 필요한 열용량입니다.",
+                }
+            )
 
     if eff_ftir:
         detected_p = eff_ftir.get("detected_peaks") or []
+        p_count = len(detected_p)
         key_metrics_table.append(
             {
                 "instrument": "FT-IR",
                 "metric_name": "검출 피크 수 및 주요 흡수대",
-                "value": f"{len(detected_p)}개 피크",
+                "value": f"{p_count}개 피크",
                 "unit": "개",
                 "condition": eff_ftir.get("spectral_range") or "400 - 4000 cm⁻¹",
                 "category": "측정 사실",
@@ -948,20 +1089,86 @@ def perform_cross_instrument_analysis(
                 "term_explanation": "화학 결합의 고유 분자 진동 흡수 피크 개수 및 파수 위치입니다.",
             }
         )
+        if detected_p and isinstance(detected_p, list):
+            # Format top 3 peaks
+            top_peaks_str = []
+            for dp in detected_p[:3]:
+                if isinstance(dp, dict):
+                    wn = dp.get("wavenumber") or dp.get("position")
+                    assign = dp.get("assignment") or dp.get("functional_group") or ""
+                    if wn is not None:
+                        top_peaks_str.append(f"{float(wn):.1f} cm⁻¹" + (f" ({assign})" if assign else ""))
+                elif isinstance(dp, (int, float)):
+                    top_peaks_str.append(f"{float(dp):.1f} cm⁻¹")
+            if top_peaks_str:
+                key_metrics_table.append(
+                    {
+                        "instrument": "FT-IR",
+                        "metric_name": "주요 특성 흡수 피크 (Absorption Peaks)",
+                        "value": ", ".join(top_peaks_str),
+                        "unit": "cm⁻¹",
+                        "condition": "피크 피팅 및 베이스라인 보정",
+                        "category": "측정 사실",
+                        "source_label": eff_ftir.get("source_file") or "FT-IR 스펙트럼",
+                        "term_explanation": "분자 결합의 신축(Stretching) 또는 굽힘(Bending) 진동에 대응하는 고유 적외선 흡수 파수입니다.",
+                    }
+                )
 
     if eff_dsc:
+        tg_val = eff_dsc.get("glass_transition_temp_C") or (eff_dsc.get("thermal_events") or {}).get("tg_C")
+        if tg_val is not None:
+            key_metrics_table.append(
+                {
+                    "instrument": "DSC",
+                    "metric_name": "유리전이온도 (Glass Transition Temp, Tg)",
+                    "value": f"{tg_val}",
+                    "unit": "°C",
+                    "condition": eff_dsc.get("heating_rate") or "승온 열류 측정 (변곡점)",
+                    "category": "측정 사실",
+                    "source_label": eff_dsc.get("source_file") or "DSC 열류 곡선",
+                    "term_explanation": "비정질 고분자 또는 유리질 매트릭스가 단단한 유리 상태에서 유연한 고무 상태로 전이하는 기준 온도입니다.",
+                }
+            )
+        tc_val = eff_dsc.get("crystallization_temp_C") or (eff_dsc.get("thermal_events") or {}).get("tc_C")
+        if tc_val is not None:
+            key_metrics_table.append(
+                {
+                    "instrument": "DSC",
+                    "metric_name": "결정화 온도 (Crystallization Temp, Tc)",
+                    "value": f"{tc_val}",
+                    "unit": "°C",
+                    "condition": eff_dsc.get("heating_rate") or "발열 피크 정점",
+                    "category": "측정 사실",
+                    "source_label": eff_dsc.get("source_file") or "DSC 열류 곡선",
+                    "term_explanation": "가열 또는 냉각 중 무질서한 사슬이 규칙적인 결정 격자를 형성하며 열을 방출하는 전이 온도입니다.",
+                }
+            )
         tm_val = eff_dsc.get("melting_temp_C") or (eff_dsc.get("thermal_events") or {}).get("melting_peak_C")
         if tm_val is not None:
             key_metrics_table.append(
                 {
                     "instrument": "DSC",
-                    "metric_name": "상전이 / 융점 온도 (Tm)",
+                    "metric_name": "용융 전이 온도 (Melting Temp, Tm)",
                     "value": f"{tm_val}",
                     "unit": "°C",
-                    "condition": eff_dsc.get("heating_rate") or "승온 열류 측정",
+                    "condition": eff_dsc.get("heating_rate") or "승온 흡열 피크 정점",
                     "category": "측정 사실",
                     "source_label": eff_dsc.get("source_file") or "DSC 열류 곡선",
-                    "term_explanation": "열류량 곡선의 흡열 피크 정점으로부터 산출한 상변화/용융 전이 온도입니다.",
+                    "term_explanation": "결정 격자가 완전히 붕괴되어 액상으로 변화하는 고체-액체 상전이 온도입니다.",
+                }
+            )
+        dh_val = eff_dsc.get("enthalpy_change_J_g") or eff_dsc.get("delta_H_J_g") or (eff_dsc.get("thermal_events") or {}).get("melting_enthalpy_J_g")
+        if dh_val is not None:
+            key_metrics_table.append(
+                {
+                    "instrument": "DSC",
+                    "metric_name": "상전이 엔탈피 변화 (Enthalpy Change, ΔH)",
+                    "value": f"{dh_val}",
+                    "unit": "J/g",
+                    "condition": "열류 피크 면적 적분",
+                    "category": "계산 결과",
+                    "source_label": eff_dsc.get("source_file") or "DSC 피크 적분",
+                    "term_explanation": "상전이 과정에서 흡수되거나 방출된 단위 질량당 총 잠열(Latent Heat) 에너지입니다.",
                 }
             )
 
@@ -978,6 +1185,26 @@ def perform_cross_instrument_analysis(
                     "category": "계산 결과",
                     "source_label": eff_tga.get("source_file") or "TGA 열중량 곡선",
                     "term_explanation": "시편의 열분해로 인한 급격한 중량 감량이 시작되는 개시 온도입니다.",
+                }
+            )
+        t5_val = eff_tga.get("t5_C") or eff_tga.get("temp_5pct_loss_C")
+        t10_val = eff_tga.get("t10_C") or eff_tga.get("temp_10pct_loss_C")
+        if t5_val is not None or t10_val is not None:
+            t_str_parts = []
+            if t5_val is not None:
+                t_str_parts.append(f"T5% = {t5_val} °C")
+            if t10_val is not None:
+                t_str_parts.append(f"T10% = {t10_val} °C")
+            key_metrics_table.append(
+                {
+                    "instrument": "TGA",
+                    "metric_name": "열안정성 지표 (5% / 10% 감량 온도)",
+                    "value": " | ".join(t_str_parts),
+                    "unit": "°C",
+                    "condition": "초기 중량 대비 백분율 감량점",
+                    "category": "측정 사실",
+                    "source_label": eff_tga.get("source_file") or "TGA 열중량 곡선",
+                    "term_explanation": "초기 중량에서 각각 5% 및 10%의 질량이 소실된 온도로, 내열성 평가의 표준 기준입니다.",
                 }
             )
         t_res = eff_tga.get("final_residue_pct") or eff_tga.get("residue_pct")
@@ -1012,21 +1239,21 @@ def perform_cross_instrument_analysis(
     # Part 4: Structured Cross-Instrument Correlations (측정 사실 · 계산 결과 · 해석 가설 분리)
     cross_correlations: List[Dict[str, Any]] = []
 
-    if xrd_data and utm_data:
+    if eff_xrd and eff_utm:
         cross_correlations.append(
             {
                 "id": "corr_xrd_utm",
                 "title": "결정구조 · 결정립(XRD/SEM) ↔ 기계적 강도 · 연신율(UTM) 연계 해석",
-                "instruments": ["XRD", "UTM"] + (["SEM"] if sem_data else []),
+                "instruments": ["XRD", "UTM"] + (["SEM"] if eff_sem else []),
                 "basis_condition": f"시료 ID: {sample_id} | 조성: {material_name} | 온도: {temp_str}",
                 "measured_facts": [
-                    f"[XRD 측정 사실] 주 결정상 {xrd_data.get('primary_phase') or material_name} (공간군 {xrd_data.get('space_group') or '-'}); "
-                    f"UTM 최대 인장강도 {utm_data.get('tensile_strength_MPa') or '-'} MPa, 파단 연신율 {utm_data.get('elongation_pct') or '-'}%."
+                    f"[XRD 측정 사실] 주 결정상 {eff_xrd.get('primary_phase') or material_name} (공간군 {eff_xrd.get('space_group') or '-'}); "
+                    f"UTM 최대 인장강도 {eff_utm.get('tensile_strength_MPa') or '-'} MPa, 파단 연신율 {eff_utm.get('elongation_pct') or '-'}%."
                 ],
                 "calculated_results": [
-                    f"[계산 결과] XRD Scherrer 결정자 크기 D = {xrd_data.get('crystallite_size_nm') or xrd_data.get('scherrer_crystallite_size_nm') or '-'} nm"
-                    + (f", SEM 평균 결정립 크기 {sem_data.get('grain_size_um')} µm (기공률 {sem_data.get('porosity_pct')}%)" if sem_data else "")
-                    + f", UTM 탄성계수 E = {utm_data.get('elastic_modulus_GPa') or '-'} GPa, 0.2% 항복강도 = {utm_data.get('yield_strength_MPa') or '-'} MPa."
+                    f"[계산 결과] XRD Scherrer 결정자 크기 D = {eff_xrd.get('crystallite_size_nm') or eff_xrd.get('scherrer_crystallite_size_nm') or '-'} nm"
+                    + (f", SEM 평균 결정립 크기 {eff_sem.get('grain_size_um')} µm (기공률 {eff_sem.get('porosity_pct')}%)" if eff_sem else "")
+                    + f", UTM 탄성계수 E = {eff_utm.get('elastic_modulus_GPa') or '-'} GPa, 0.2% 항복강도 = {eff_utm.get('yield_strength_MPa') or '-'} MPa."
                 ],
                 "interpretation_hypotheses": [
                     "[해석 가설] 탄성계수(E)는 XRD로 확인된 결정구조의 원자간 결합 강성을 반영하며, 미세한 결정립/도메인 경계는 전위 이동을 방해(Hall–Petch 강화 메커니즘)하여 항복강도 상승에 기여할 수 있습니다.",
@@ -1036,19 +1263,19 @@ def perform_cross_instrument_analysis(
             }
         )
 
-    if xrd_data and hall_data:
+    if eff_xrd and eff_hall:
         cross_correlations.append(
             {
                 "id": "corr_xrd_hall",
                 "title": "결정구조 · 도펀트 고용(XRD/SEM) ↔ 전하 수송 특성(Hall Effect) 연계 해석",
-                "instruments": ["XRD", "Hall"] + (["SEM"] if sem_data else []),
+                "instruments": ["XRD", "Hall"] + (["SEM"] if eff_sem else []),
                 "basis_condition": f"시료 ID: {sample_id} | 조성: {material_name} | 온도: {temp_str}",
                 "measured_facts": [
-                    f"[측정 사실] XRD 주상 {xrd_data.get('primary_phase') or material_name} 확인 및 Hall 전기전도도 σ = {hall_data.get('electrical_conductivity_S_cm') or '-'} S/cm ({hall_data.get('carrier_type') or '-'})."
+                    f"[측정 사실] XRD 주상 {eff_xrd.get('primary_phase') or material_name} 확인 및 Hall 전기전도도 σ = {eff_hall.get('electrical_conductivity_S_cm') or '-'} S/cm ({eff_hall.get('carrier_type') or '-'})."
                 ],
                 "calculated_results": [
-                    f"[계산 결과] Hall 캐리어 농도 n = {float(hall_data['carrier_concentration_cm3']):.2e} cm⁻³, 홀 이동도 µ_H = {hall_data.get('hall_mobility_cm2_Vs')} cm²/(V·s), XRD 결정자 크기 D = {xrd_data.get('crystallite_size_nm') or xrd_data.get('scherrer_crystallite_size_nm') or '-'} nm."
-                    if hall_data.get("carrier_concentration_cm3") is not None
+                    f"[계산 결과] Hall 캐리어 농도 n = {float(eff_hall['carrier_concentration_cm3']):.2e} cm⁻³, 홀 이동도 µ_H = {eff_hall.get('hall_mobility_cm2_Vs')} cm²/(V·s), XRD 결정자 크기 D = {eff_xrd.get('crystallite_size_nm') or eff_xrd.get('scherrer_crystallite_size_nm') or '-'} nm."
+                    if eff_hall.get("carrier_concentration_cm3") is not None
                     else "[계산 결과] Hall 전하 수송 지표 및 XRD 결정자 크기 산출 완료."
                 ],
                 "interpretation_hypotheses": [

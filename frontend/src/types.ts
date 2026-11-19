@@ -652,6 +652,89 @@ export interface ScopedIntegratedReportRequest {
   run_ai?: boolean;
 }
 
+export interface IntegratedReportReference {
+  id?: string;
+  doi?: string;
+  title: string;
+  authors?: string[];
+  year?: number;
+  journal?: string;
+  is_open_access?: boolean;
+  oa_url?: string;
+  evidence_location?: string;
+  key_claims?: string[];
+  relevance_notes?: string;
+}
+
+export interface SemVisualizationItem {
+  id: string;
+  label: string;
+  run_id?: string;
+  project_id?: string;
+  file_id?: string;
+  original_filename?: string;
+  has_overlay?: boolean;
+  has_roi?: boolean;
+  overlay_url?: string | null;
+  roi_url?: string | null;
+  raw_image_url?: string | null;
+  histogram?: {
+    bin_edges: number[];
+    counts: number[];
+    unit?: string;
+    basis?: string;
+  } | null;
+  summary_stats?: Record<string, any> | null;
+  grain_intercept?: Record<string, any> | null;
+  metrics?: Record<string, any> | null;
+}
+
+export interface AiScientificReport {
+  executive_summary: string;
+  sample_information?: {
+    sample_name: string;
+    chemical_formula: string;
+    processing_conditions: string;
+    selected_instruments: string[];
+    runs_used: string;
+  };
+  individual_interpretations?: Array<{
+    instrument: string;
+    core_results: string;
+    quantitative_values: string;
+    curve_features: string;
+    physical_meaning: string;
+    literature_comparison: string;
+    uncertainties: string;
+  }>;
+  cross_technique_correlations?: Array<{
+    pair_title: string;
+    instruments: string[];
+    structural_property_relationship: string;
+    proven_facts: string;
+    working_hypothesis: string;
+  }>;
+  literature_discussion?: {
+    key_findings: string;
+    comparison_with_measurements: string;
+    mechanistic_insights: string;
+    literature_applicability_limits: string;
+  };
+  limitations_and_future_work?: {
+    unresolved_aspects: string;
+    measurement_uncertainties: string;
+    hypothesis_validation_plan: string;
+    suggested_next_experiments: string[];
+  };
+  references?: IntegratedReportReference[];
+  analysis_summary: string;
+  data_quality_assessment: string;
+  physical_mechanisms?: string[];
+  scientific_cautions: string;
+  recommended_experiments?: string[];
+  ai_engine?: string;
+}
+
 export interface IntegratedReportSnapshot {
   report_id: string;
   title: string;
@@ -663,14 +746,9 @@ export interface IntegratedReportSnapshot {
   selected_items: ScopedAnalysisSelection[];
   analysis_result: IntegratedAnalysisResult & { report_title?: string };
   multi_curves?: Record<string, any[]>;
-  ai_interpretation?: {
-    analysis_summary: string;
-    data_quality_assessment: string;
-    physical_mechanisms: string[];
-    scientific_cautions: string;
-    recommended_experiments: string[];
-    ai_engine?: string;
-  };
+  sem_visualizations?: SemVisualizationItem[];
+  references?: IntegratedReportReference[];
+  ai_interpretation?: AiScientificReport;
   created_at: string;
 }
 

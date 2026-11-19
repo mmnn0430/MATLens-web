@@ -573,11 +573,12 @@ export const api = {
     return handleJson<any>(r);
   },
 
-  getSavedAnalyses: async (params?: { instrument?: string; sample_id?: string; query?: string }) => {
+  getSavedAnalyses: async (params?: { instrument?: string; sample_id?: string; query?: string; latest_only?: boolean }) => {
     const searchParams = new URLSearchParams();
     if (params?.instrument) searchParams.set("instrument", params.instrument);
     if (params?.sample_id) searchParams.set("sample_id", params.sample_id);
     if (params?.query) searchParams.set("query", params.query);
+    if (params?.latest_only) searchParams.set("latest_only", "true");
     const qs = searchParams.toString() ? `?${searchParams.toString()}` : "";
     const r = await fetch(`/api/v1/saved-analyses${qs}`);
     return handleJson<{ items: SavedAnalysisItem[]; counts: SavedAnalysisCounts; total_count: number }>(r);
